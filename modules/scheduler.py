@@ -95,8 +95,19 @@ async def setup_posting_schedule(bot, chat_id: int):
                 if i < len(by_category[cat]):
                     ordered.append(by_category[cat][i])
 
-        # Assign scheduled times
-        start_date = date.today() + timedelta(days=1)
+        # Assign scheduled times — start after last already-scheduled pin
+        async with aiosqlite.connect(DB_PATH) as db:
+            async with db.execute(
+                "SELECT MAX(scheduled_at) as last FROM pins_schedule WHERE status = 'pending'"
+            ) as cur:
+                row = await cur.fetchone()
+                last_scheduled = row[0] if row and row[0] else None
+
+        if last_scheduled:
+            last_date = date.fromisoformat(last_scheduled[:10])
+            start_date = max(last_date, date.today()) + timedelta(days=1)
+        else:
+            start_date = date.today() + timedelta(days=1)
         posting_hours = list(range(9, 22))  # 9:00-21:00 МСК
         schedule_entries = []
 
@@ -138,17 +149,20 @@ async def setup_posting_schedule(bot, chat_id: int):
             await db.commit()
 
         end_date = start_date + timedelta(days=days - 1)
+
+        state = await get_state()
+        # Keep original start_date if posting already running
+        existing_start = state.get("posting_start_date")
         await set_state(
             posting_status="running",
-            posting_start_date=start_date.isoformat(),
+            posting_start_date=existing_start or start_date.isoformat(),
             posting_end_date=end_date.isoformat(),
         )
 
         await bot.send_message(
             chat_id,
-            f"{total} пинов на {days} дней ({IMAGES_PER_DAY_MIN}-{IMAGES_PER_DAY_MAX}/день).\n"
-            f"Начало: {start_date.strftime('%d.%m.%Y')}, конец: {end_date.strftime('%d.%m.%Y')} (МСК)\n\n"
-            f"Постинг запущен автоматически по расписанию."
+            f"Добавлено {total} пинов на {days} дней ({IMAGES_PER_DAY_MIN}-{IMAGES_PER_DAY_MAX}/день).\n"
+            f"Постятся с {start_date.strftime('%d.%m.%Y')} по {end_date.strftime('%d.%m.%Y')} (МСК)"
         )
 
     except Exception as e:

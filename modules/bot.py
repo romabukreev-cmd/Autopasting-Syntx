@@ -161,14 +161,11 @@ async def cb_generate(call: CallbackQuery):
 @admin_only
 async def cb_start_posting(call: CallbackQuery):
     state = await get_state()
-    if state.get("posting_status") == "running":
-        await call.answer("Постинг уже активен.", show_alert=True)
-        return
     if state.get("generation_status") not in ("done", "partial"):
         await call.answer("Сначала завершите генерацию.", show_alert=True)
         return
-    await call.answer("Составляю расписание...")
-    await call.message.answer("Составляю расписание постинга...")
+    await call.answer("Добавляю пины в расписание...")
+    await call.message.answer("Добавляю новые пины в расписание постинга...")
     from modules.scheduler import setup_posting_schedule
     asyncio.create_task(setup_posting_schedule(call.bot, call.message.chat.id))
 
@@ -274,13 +271,10 @@ async def cmd_generate(message: Message):
 @admin_only
 async def cmd_start_posting(message: Message):
     state = await get_state()
-    if state.get("posting_status") == "running":
-        await message.answer("Постинг уже активен. Дождись окончания.")
-        return
     if state.get("generation_status") not in ("done", "partial"):
         await message.answer("Сначала завершите генерацию изображений.")
         return
-    await message.answer("Составляю расписание постинга...")
+    await message.answer("Добавляю новые пины в расписание постинга...")
     from modules.scheduler import setup_posting_schedule
     asyncio.create_task(setup_posting_schedule(message.bot, message.chat.id))
 
