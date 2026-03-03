@@ -8,5 +8,5 @@ google-api-python-client==2.127.0
 google-auth-httplib2==0.2.0
 Pillow==10.3.0
 python-dotenv==1.0.1
-openai==1.30.0
+openai>=1.52.0
 pytz>=2024.1
