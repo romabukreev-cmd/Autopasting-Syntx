@@ -31,9 +31,10 @@ def kb_pinterest(week: int = 1):
         [InlineKeyboardButton(text="Анализ референсов", callback_data="pin:analyze")],
         [
             InlineKeyboardButton(text="◀", callback_data=f"pin:week:{max(1, week - 1)}"),
-            InlineKeyboardButton(text=f"Генерация — неделя {week}", callback_data=f"pin:generate:{week}"),
+            InlineKeyboardButton(text=f"Неделя {week}", callback_data=f"pin:week:{week}"),
             InlineKeyboardButton(text="▶", callback_data=f"pin:week:{week + 1}"),
         ],
+        [InlineKeyboardButton(text=f"▶ Генерация недели {week}", callback_data=f"pin:generate:{week}")],
         [InlineKeyboardButton(text="Запустить постинг", callback_data="pin:start")],
         [InlineKeyboardButton(text="Повторить упавшие", callback_data="pin:retry")],
         [InlineKeyboardButton(text="Статус", callback_data="pin:status")],

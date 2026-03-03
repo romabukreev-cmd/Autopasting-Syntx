@@ -52,17 +52,25 @@ async def setup_posting_schedule(bot, chat_id: int):
         await sheets.load_sheets()
         sheets_data = sheets.get_cached()
 
-        # Get pending generations with their pinterest file IDs
+        # Get pending generations — collect BOTH pin file IDs (seedream + nanobana)
         async with aiosqlite.connect(DB_PATH) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
-                """SELECT g.id, g.pinterest_file_id, r.category
+                """SELECT g.id, g.pinterest_file_id, g.nb_pinterest_file_id, r.category
                    FROM generations g
                    JOIN refs r ON g.reference_id = r.id
-                   WHERE g.status = 'success' AND g.pinterest_file_id IS NOT NULL
+                   WHERE g.status = 'success'
                      AND g.id NOT IN (SELECT generation_id FROM pins_schedule)"""
             ) as cur:
-                ready = await cur.fetchall()
+                rows = await cur.fetchall()
+
+        # Flatten: each generation → up to 2 pin entries
+        ready = []
+        for row in rows:
+            if row["pinterest_file_id"]:
+                ready.append({"id": row["id"], "file_id": row["pinterest_file_id"], "category": row["category"]})
+            if row["nb_pinterest_file_id"]:
+                ready.append({"id": row["id"], "file_id": row["nb_pinterest_file_id"], "category": row["category"]})
 
         if not ready:
             await bot.send_message(chat_id, "Нет готовых изображений для постинга.")
@@ -77,7 +85,7 @@ async def setup_posting_schedule(bot, chat_id: int):
         # Interleave categories
         by_category: dict[str, list] = {}
         for row in ready:
-            by_category.setdefault(row["category"], []).append(dict(row))
+            by_category.setdefault(row["category"], []).append(row)
 
         ordered = []
         cats = list(by_category.keys())
@@ -105,7 +113,7 @@ async def setup_posting_schedule(bot, chat_id: int):
                 board_id = cat_data.get("board_id", "")
                 schedule_entries.append({
                     "generation_id": item["id"],
-                    "gdrive_file_id": item["pinterest_file_id"],
+                    "gdrive_file_id": item["file_id"],
                     "category": item["category"],
                     "board_id": board_id,
                     "scheduled_at": dt.isoformat(),

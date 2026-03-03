@@ -26,9 +26,16 @@ async def init_db():
                 status TEXT NOT NULL DEFAULT 'pending',
                 gdrive_file_id TEXT,
                 pinterest_file_id TEXT,
+                nb_pinterest_file_id TEXT,
                 FOREIGN KEY (reference_id) REFERENCES refs(id)
             )
         """)
+        # Migration: add nb_pinterest_file_id if missing (existing DB)
+        try:
+            await db.execute("ALTER TABLE generations ADD COLUMN nb_pinterest_file_id TEXT")
+            await db.commit()
+        except Exception:
+            pass
 
         await db.execute("""
             CREATE TABLE IF NOT EXISTS pins_schedule (

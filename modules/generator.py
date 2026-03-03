@@ -144,16 +144,14 @@ async def _get_week_prompts(week: int) -> list[dict]:
     return await _get_week_prompts(week)
 
 
-async def _process_one(gen_id: int, item: dict) -> tuple[bool, bool]:
+async def _process_one(gen_id: int, item: dict, week: int) -> tuple[bool, bool]:
     """
     Generate image with BOTH models (SeeDream and NanaBana), apply overlay, upload to Drive.
-    Saves to seedream/ and nanobana/ subfolders.
-    Returns (success_model1, success_model2).
+    Structure: База генераций / week_{week} / {category} / seedream|nanobana|*_pin /
+    Returns (success_seedream, success_nanobana).
     """
     category = item["category"]
-    today = date.today().strftime("%Y-%m-%d")
-    folder_name = f"{today}_{category}"
-    base_path = f"{DRIVE_BASE_PATH}/{DRIVE_FOLDER_GENS}/{folder_name}"
+    base_path = f"{DRIVE_BASE_PATH}/{DRIVE_FOLDER_GENS}/week_{week}/{category}"
 
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
@@ -161,49 +159,47 @@ async def _process_one(gen_id: int, item: dict) -> tuple[bool, bool]:
         )
         await db.commit()
 
-    success_gpt = False
+    success_sd = False
     success_nb = False
-    main_file_id = ""
-    main_pin_id = ""
+    sd_file_id = ""
+    sd_pin_id = ""
+    nb_pin_id = ""
 
     # --- SeeDream image ---
-    gpt_data = await _generate_with_retry(item["full"], MODEL_IMAGE_1)
-    if gpt_data:
-        gpt_file_id = await drive.upload_file(gpt_data, f"{base_path}/seedream/gen_{gen_id:04d}.jpg")
-        gpt_pin = overlay.apply_overlay(gpt_data, item["short"])
-        gpt_pin_id = await drive.upload_file(gpt_pin, f"{base_path}/seedream_pin/gen_{gen_id:04d}.jpg")
-        success_gpt = True
-        main_file_id = gpt_file_id
-        main_pin_id = gpt_pin_id
+    sd_data = await _generate_with_retry(item["full"], MODEL_IMAGE_1)
+    if sd_data:
+        sd_file_id = await drive.upload_file(sd_data, f"{base_path}/seedream/gen_{gen_id:04d}.jpg")
+        sd_pin = overlay.apply_overlay(sd_data, item["short"])
+        sd_pin_id = await drive.upload_file(sd_pin, f"{base_path}/seedream_pin/gen_{gen_id:04d}.jpg")
+        success_sd = True
         logger.info(f"gen_{gen_id:04d} SeeDream: ok")
     else:
         logger.warning(f"gen_{gen_id:04d} SeeDream: failed")
 
-    # --- Nano Banana image ---
+    # --- NanaBana image ---
     nb_data = await _generate_with_retry(item["full"], MODEL_IMAGE_2)
     if nb_data:
-        nb_file_id = await drive.upload_file(nb_data, f"{base_path}/nanobana/gen_{gen_id:04d}.jpg")
+        await drive.upload_file(nb_data, f"{base_path}/nanobana/gen_{gen_id:04d}.jpg")
         nb_pin = overlay.apply_overlay(nb_data, item["short"])
-        await drive.upload_file(nb_pin, f"{base_path}/nanobana_pin/gen_{gen_id:04d}.jpg")
+        nb_pin_id = await drive.upload_file(nb_pin, f"{base_path}/nanobana_pin/gen_{gen_id:04d}.jpg")
         success_nb = True
-        if not main_file_id:
-            main_file_id = nb_file_id
         logger.info(f"gen_{gen_id:04d} NanaBana: ok")
     else:
         logger.warning(f"gen_{gen_id:04d} NanaBana: failed")
 
-    # Update DB
+    # Update DB — store both pin IDs
     async with aiosqlite.connect(DB_PATH) as db:
-        if success_gpt or success_nb:
+        if success_sd or success_nb:
             await db.execute(
-                "UPDATE generations SET status = 'success', gdrive_file_id = ?, pinterest_file_id = ? WHERE id = ?",
-                (main_file_id, main_pin_id, gen_id),
+                "UPDATE generations SET status = 'success', gdrive_file_id = ?, "
+                "pinterest_file_id = ?, nb_pinterest_file_id = ? WHERE id = ?",
+                (sd_file_id, sd_pin_id, nb_pin_id, gen_id),
             )
         else:
             await db.execute("UPDATE generations SET status = 'failed' WHERE id = ?", (gen_id,))
         await db.commit()
 
-    return success_gpt, success_nb
+    return success_sd, success_nb
 
 
 async def run_generation(bot, chat_id: int, week: int):
@@ -228,7 +224,7 @@ async def run_generation(bot, chat_id: int, week: int):
             if not gen_id:
                 continue
 
-            ok_gpt, ok_nb = await _process_one(gen_id, item)
+            ok_gpt, ok_nb = await _process_one(gen_id, item, week)
             if ok_gpt:
                 gpt_ok += 1
             if ok_nb:
@@ -270,7 +266,7 @@ async def run_retry(bot, chat_id: int):
         async with aiosqlite.connect(DB_PATH) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
-                "SELECT g.id, g.reference_id, g.prompt_index, r.category, r.prompts "
+                "SELECT g.id, g.reference_id, g.prompt_index, g.week_number, r.category, r.prompts "
                 "FROM generations g JOIN refs r ON g.reference_id = r.id "
                 "WHERE g.status = 'failed'"
             ) as cur:
@@ -304,7 +300,7 @@ async def run_retry(bot, chat_id: int):
                 )
                 await db.commit()
 
-            ok_gpt, ok_nb = await _process_one(row["id"], item)
+            ok_gpt, ok_nb = await _process_one(row["id"], item, row["week_number"])
             if ok_gpt:
                 gpt_ok += 1
             if ok_nb:
