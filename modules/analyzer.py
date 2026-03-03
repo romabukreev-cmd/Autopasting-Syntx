@@ -10,6 +10,7 @@ from openai import AsyncOpenAI
 from config import (
     DB_PATH,
     DELAY_GDRIVE_DOWNLOAD,
+    DRIVE_BASE_PATH,
     DRIVE_FOLDER_REFS,
     IMAGES_PER_WEEK,
     OPENROUTER_API_KEY,
@@ -23,27 +24,27 @@ logger = logging.getLogger(__name__)
 
 client = AsyncOpenAI(api_key=OPENROUTER_API_KEY, base_url=OPENROUTER_BASE_URL)
 
-ANALYZE_PROMPT = """You are analyzing a reference image that contains both a visual composition and possibly a visible text prompt (e.g. a Midjourney or Leonardo screenshot).
+ANALYZE_PROMPT = """You are analyzing a reference image that may contain a visible AI generation prompt (e.g. a Midjourney or Leonardo screenshot).
 
-Your task:
-1. OCR: read any text visible on the image (full prompt if present)
-2. Visual description: describe the style, composition, subjects, colors, mood
+Your tasks:
+1. OCR: read any text visible on the image
+2. Visual description: describe style, composition, subjects, colors, mood — ignoring text overlays
 3. Decide on a flag:
-   - "match": the OCR text clearly describes what's shown → it IS the generation prompt
-   - "partial": OCR text partially relates to the visual, but has errors or is incomplete
-   - "no_match": no readable text, or text is unrelated to the visual content
+   - "match": OCR text clearly IS a generation prompt describing the visual
+   - "partial": OCR text partially relates to the visual (errors or incomplete)
+   - "no_match": no readable text, or text is unrelated to the visual
 
 Return JSON only:
 {
   "ocr_text": "...",
   "visual_description": "...",
   "flag": "match|partial|no_match",
-  "base_prompt": "..."  // the best prompt to use based on flag logic
+  "base_prompt": "..."
 }"""
 
 VARIANTS_PROMPT = """You are a creative AI art director. Given a base image generation prompt, create 5 variations.
 
-Variation rules:
+Rules:
 - #1: original (unchanged)
 - #2: change gender/character type if applicable, keep composition
 - #3: change color palette significantly
@@ -51,8 +52,8 @@ Variation rules:
 - #5: change style (e.g. photorealistic → cinematic, digital art → oil painting)
 
 For each variation provide:
-- "full": complete prompt up to 1000 characters (used for image generation)
-- "short": 80-120 character summary (used as text overlay on image)
+- "full": complete prompt up to 1000 characters (for image generation)
+- "short": 80-120 character summary (for text overlay on image)
 
 Return JSON only:
 {
@@ -64,31 +65,25 @@ Return JSON only:
 
 
 async def _analyze_reference(image_data: bytes) -> dict:
-    """Call 1: OCR + visual description + flag + base_prompt."""
     b64 = base64.b64encode(image_data).decode()
     resp = await client.chat.completions.create(
         model=MODEL_ANALYZER,
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": ANALYZE_PROMPT},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-                ],
-            }
-        ],
+        messages=[{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": ANALYZE_PROMPT},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+            ],
+        }],
         response_format={"type": "json_object"},
     )
     return json.loads(resp.choices[0].message.content)
 
 
 async def _generate_variants(base_prompt: str) -> list[dict]:
-    """Call 2: generate 5 prompt variants (full + short each)."""
     resp = await client.chat.completions.create(
         model=MODEL_ANALYZER,
-        messages=[
-            {"role": "user", "content": f"{VARIANTS_PROMPT}\n\nBase prompt:\n{base_prompt}"}
-        ],
+        messages=[{"role": "user", "content": f"{VARIANTS_PROMPT}\n\nBase prompt:\n{base_prompt}"}],
         response_format={"type": "json_object"},
     )
     data = json.loads(resp.choices[0].message.content)
@@ -97,64 +92,57 @@ async def _generate_variants(base_prompt: str) -> list[dict]:
 
 async def run_analysis(bot, chat_id: int):
     try:
-        # Find root refs folder
-        refs_folder_id = await drive.get_folder_id(DRIVE_FOLDER_REFS)
-        if not refs_folder_id:
-            await bot.send_message(chat_id, f"Папка '{DRIVE_FOLDER_REFS}' не найдена на Google Drive.")
-            await set_state(analysis_status="idle")
-            return
+        refs_base = f"{DRIVE_BASE_PATH}/{DRIVE_FOLDER_REFS}"
 
         # List category subfolders
-        subfolders = await drive.list_files(refs_folder_id)
-        categories = [f for f in subfolders if f["mimeType"] == "application/vnd.google-apps.folder"]
-
+        categories = await drive.list_dirs(refs_base)
         if not categories:
-            await bot.send_message(chat_id, "Нет категорий в папке Референсы.")
+            await bot.send_message(chat_id, f"Папка '{refs_base}' пуста или не найдена на Google Drive.")
             await set_state(analysis_status="idle")
             return
 
-        # Collect all reference files
-        all_refs = []
-        for cat in categories:
-            files = await drive.list_files(cat["id"])
-            images = [f for f in files if "image" in f.get("mimeType", "")]
-            for img in images:
-                all_refs.append({"file": img, "category": cat["name"]})
-
-        total = len(all_refs)
-        new_count = 0
-        skipped = 0
-
-        # Check which are already processed
+        # Load existing refs from DB
         async with aiosqlite.connect(DB_PATH) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute("SELECT gdrive_file_id, md5 FROM refs") as cur:
                 existing = {row["gdrive_file_id"]: row["md5"] async for row in cur}
 
-        await bot.send_message(
-            chat_id,
-            f"Найдено {total} референсов. Начинаю проверку..."
-        )
+        # Collect all image files
+        all_refs = []
+        for cat in categories:
+            cat_path = f"{refs_base}/{cat['name']}"
+            files = await drive.list_files(cat_path)
+            images = [f for f in files if "image" in f.get("mime_type", "") or
+                      f["name"].lower().endswith((".jpg", ".jpeg", ".png", ".webp"))]
+            for img in images:
+                img["category"] = cat["name"]
+                img["path"] = f"{cat_path}/{img['name']}"
+            all_refs.extend(images)
 
+        total = len(all_refs)
+        if total == 0:
+            await bot.send_message(chat_id, "Референсы не найдены. Загрузи изображения в папки Референсов на Drive.")
+            await set_state(analysis_status="idle")
+            return
+
+        # Determine what's new or changed
         to_process = []
+        skipped = 0
         for ref in all_refs:
-            file_id = ref["file"]["id"]
+            file_id = ref["id"]
+            drive_md5 = ref.get("md5", "")
             if file_id not in existing:
                 to_process.append(ref)
+            elif drive_md5 and drive_md5 != existing[file_id]:
+                to_process.append(ref)  # file replaced
             else:
-                # Download to check MD5
-                data = await drive.download_file(file_id)
-                md5 = await drive.compute_md5(data)
-                if md5 != existing[file_id]:
-                    to_process.append({**ref, "_data": data, "_md5": md5})
-                else:
-                    skipped += 1
-                await asyncio.sleep(DELAY_GDRIVE_DOWNLOAD)
+                skipped += 1
 
         new_count = len(to_process)
         await bot.send_message(
             chat_id,
-            f"Новых: {new_count}. Уже обработанных: {skipped}. Начинаю анализ {new_count} новых."
+            f"Найдено {total} референсов. Новых: {new_count}. Уже обработанных: {skipped}.\n"
+            f"Начинаю анализ {new_count} новых..."
         )
 
         if not to_process:
@@ -164,28 +152,22 @@ async def run_analysis(bot, chat_id: int):
         processed = 0
         for ref in to_process:
             try:
-                file_id = ref["file"]["id"]
-                category = ref["category"]
-                data = ref.get("_data") or await drive.download_file(file_id)
-                md5 = ref.get("_md5") or await drive.compute_md5(data)
+                data = await drive.download_file(ref["path"])
+                md5 = await drive.compute_md5(data)
 
-                # GPT-4o call 1: analyze
                 analysis = await _analyze_reference(data)
                 base_prompt = analysis.get("base_prompt", "")
 
-                # GPT-4o call 2: 5 variants
                 variants = await _generate_variants(base_prompt)
-
                 prompts_json = json.dumps(variants, ensure_ascii=False)
                 today = date.today().isoformat()
 
                 async with aiosqlite.connect(DB_PATH) as db:
-                    # Remove old entry if file changed
-                    await db.execute("DELETE FROM refs WHERE gdrive_file_id = ?", (file_id,))
+                    await db.execute("DELETE FROM refs WHERE gdrive_file_id = ?", (ref["id"],))
                     await db.execute(
                         """INSERT INTO refs (filename, category, gdrive_file_id, md5, processed_at, prompts)
                            VALUES (?, ?, ?, ?, ?, ?)""",
-                        (ref["file"]["name"], category, file_id, md5, today, prompts_json),
+                        (ref["name"], ref["category"], ref["id"], md5, today, prompts_json),
                     )
                     await db.commit()
 
@@ -193,16 +175,16 @@ async def run_analysis(bot, chat_id: int):
                 await asyncio.sleep(DELAY_GDRIVE_DOWNLOAD)
 
             except Exception as e:
-                logger.error(f"Error processing {ref['file']['name']}: {e}")
+                logger.error(f"Error processing {ref['name']}: {e}")
 
         total_prompts = processed * 5
         weeks = round(total_prompts / IMAGES_PER_WEEK, 1)
 
         await bot.send_message(
             chat_id,
-            f"Готово. Создано {total_prompts} промптов ({processed} референсов × 5).\n"
+            f"Готово. Создано {total_prompts} промптов ({processed} × 5).\n"
             f"Распределено по {weeks} неделям.\n\n"
-            f"Запустить генерацию для недели 1? → /pinterest_generate 1"
+            f"Запустить генерацию → Pinterest → Генерация неделя 1"
         )
         await set_state(analysis_status="done")
 

@@ -1,127 +1,127 @@
+"""
+Google Drive module via rclone.
+rclone is already configured on the server with remote 'gdrive:'.
+No credentials.json needed.
+"""
 import asyncio
 import hashlib
-import io
+import json
 import logging
-from functools import partial
-
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
-
-from config import GDRIVE_CREDENTIALS_FILE
+import os
+import tempfile
 
 logger = logging.getLogger(__name__)
-SCOPES = ["https://www.googleapis.com/auth/drive"]
+
+REMOTE = "gdrive:"
 
 
-def _get_service():
-    creds = service_account.Credentials.from_service_account_file(
-        GDRIVE_CREDENTIALS_FILE, scopes=SCOPES
+async def _rclone(*args: str) -> str:
+    """Run rclone command, return stdout. Raises on non-zero exit."""
+    cmd = ["rclone"] + list(args)
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
     )
-    return build("drive", "v3", credentials=creds)
+    stdout, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        raise RuntimeError(f"rclone {' '.join(args)} failed: {stderr.decode()}")
+    return stdout.decode()
 
 
-async def _run_sync(func, *args, **kwargs):
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, partial(func, *args, **kwargs))
+def _remote(path: str) -> str:
+    """Build full remote path."""
+    return f"{REMOTE}{path}"
 
 
-def _list_files_sync(service, folder_id: str) -> list[dict]:
-    results = []
-    page_token = None
-    while True:
-        resp = service.files().list(
-            q=f"'{folder_id}' in parents and trashed = false",
-            fields="nextPageToken, files(id, name, mimeType)",
-            pageToken=page_token,
-        ).execute()
-        results.extend(resp.get("files", []))
-        page_token = resp.get("nextPageToken")
-        if not page_token:
-            break
-    return results
+async def list_folder(path: str) -> list[dict]:
+    """
+    List files and folders at path.
+    Returns list of dicts: {name, id, mimeType, isDir, md5}
+    """
+    out = await _rclone("lsjson", _remote(path), "--drive-use-trash=false")
+    items = json.loads(out)
+    result = []
+    for item in items:
+        result.append({
+            "name": item.get("Name", ""),
+            "id": item.get("ID", ""),
+            "mime_type": item.get("MimeType", ""),
+            "is_dir": item.get("IsDir", False),
+            "md5": item.get("Hashes", {}).get("md5", ""),
+        })
+    return result
 
 
-def _get_folder_id_sync(service, name: str, parent_id: str = None) -> str | None:
-    q = f"name = '{name}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
-    if parent_id:
-        q += f" and '{parent_id}' in parents"
-    resp = service.files().list(q=q, fields="files(id, name)").execute()
-    files = resp.get("files", [])
-    return files[0]["id"] if files else None
+async def list_files(path: str) -> list[dict]:
+    """List only files (not dirs) at path."""
+    items = await list_folder(path)
+    return [i for i in items if not i["is_dir"]]
 
 
-def _create_folder_sync(service, name: str, parent_id: str = None) -> str:
-    meta = {"name": name, "mimeType": "application/vnd.google-apps.folder"}
-    if parent_id:
-        meta["parents"] = [parent_id]
-    f = service.files().create(body=meta, fields="id").execute()
-    return f["id"]
+async def list_dirs(path: str) -> list[dict]:
+    """List only subdirectories at path."""
+    items = await list_folder(path)
+    return [i for i in items if i["is_dir"]]
 
 
-def _download_file_sync(service, file_id: str) -> bytes:
-    request = service.files().get_media(fileId=file_id)
-    buf = io.BytesIO()
-    downloader = MediaIoBaseDownload(buf, request)
-    done = False
-    while not done:
-        _, done = downloader.next_chunk()
-    return buf.getvalue()
+async def download_file(remote_path: str) -> bytes:
+    """Download file from Drive, return bytes."""
+    with tempfile.NamedTemporaryFile(delete=False) as tmp:
+        tmp_path = tmp.name
+    try:
+        await _rclone("copyto", _remote(remote_path), tmp_path)
+        with open(tmp_path, "rb") as f:
+            return f.read()
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
 
 
-def _upload_file_sync(service, name: str, mime: str, data: bytes, parent_id: str) -> str:
-    buf = io.BytesIO(data)
-    media = MediaFileUpload.__new__(MediaFileUpload)
-    # Use resumable upload via BytesIO
-    from googleapiclient.http import MediaIoBaseUpload
-    media = MediaIoBaseUpload(buf, mimetype=mime)
-    meta = {"name": name, "parents": [parent_id]}
-    f = service.files().create(body=meta, media_body=media, fields="id").execute()
-    return f["id"]
+async def upload_file(local_data: bytes, remote_path: str) -> str:
+    """
+    Upload bytes to Drive at remote_path.
+    Returns Google Drive file ID.
+    """
+    with tempfile.NamedTemporaryFile(delete=False) as tmp:
+        tmp.write(local_data)
+        tmp_path = tmp.name
+    try:
+        await _rclone("copyto", tmp_path, _remote(remote_path))
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+    # Get file ID after upload
+    parent = "/".join(remote_path.split("/")[:-1])
+    filename = remote_path.split("/")[-1]
+    items = await list_files(parent)
+    for item in items:
+        if item["name"] == filename:
+            return item["id"]
+    return ""
 
 
-def _delete_file_sync(service, file_id: str):
-    service.files().delete(fileId=file_id).execute()
+async def delete_file(remote_path: str):
+    """Delete file from Drive."""
+    await _rclone("deletefile", _remote(remote_path))
 
 
-def _compute_md5(data: bytes) -> str:
-    return hashlib.md5(data).hexdigest()
+async def mkdir(remote_path: str):
+    """Create folder (and parents) on Drive."""
+    await _rclone("mkdir", _remote(remote_path))
 
 
-# --- Async public API ---
-
-async def list_files(folder_id: str) -> list[dict]:
-    service = _get_service()
-    return await _run_sync(_list_files_sync, service, folder_id)
-
-
-async def get_folder_id(name: str, parent_id: str = None) -> str | None:
-    service = _get_service()
-    return await _run_sync(_get_folder_id_sync, service, name, parent_id)
-
-
-async def get_or_create_folder(name: str, parent_id: str = None) -> str:
-    service = _get_service()
-    folder_id = await _run_sync(_get_folder_id_sync, service, name, parent_id)
-    if folder_id:
-        return folder_id
-    return await _run_sync(_create_folder_sync, service, name, parent_id)
-
-
-async def download_file(file_id: str) -> bytes:
-    service = _get_service()
-    return await _run_sync(_download_file_sync, service, file_id)
-
-
-async def upload_file(name: str, mime: str, data: bytes, parent_id: str) -> str:
-    service = _get_service()
-    return await _run_sync(_upload_file_sync, service, name, mime, data, parent_id)
-
-
-async def delete_file(file_id: str):
-    service = _get_service()
-    await _run_sync(_delete_file_sync, service, file_id)
+async def get_file_id(remote_path: str) -> str:
+    """Get Google Drive file ID by path."""
+    parent = "/".join(remote_path.split("/")[:-1])
+    filename = remote_path.split("/")[-1]
+    items = await list_files(parent)
+    for item in items:
+        if item["name"] == filename:
+            return item["id"]
+    return ""
 
 
 async def compute_md5(data: bytes) -> str:
-    return _compute_md5(data)
+    return hashlib.md5(data).hexdigest()

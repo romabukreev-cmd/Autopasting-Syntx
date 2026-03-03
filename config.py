@@ -16,10 +16,9 @@ MODEL_ANALYZER = "openai/gpt-4o"
 MODEL_IMAGE_1 = "openai/gpt-5-image"
 MODEL_IMAGE_2 = "google/gemini-3.1-flash-image-preview"
 
-# Google
-GDRIVE_CREDENTIALS_FILE = os.getenv("GDRIVE_CREDENTIALS_FILE", "credentials.json")
+# Google Sheets (публичная ссылка — Sheet должен быть "Все со ссылкой могут просматривать")
+# ID из URL таблицы: docs.google.com/spreadsheets/d/{GSHEETS_ID}/...
 GSHEETS_ID = os.getenv("GSHEETS_ID")
-GSHEETS_RANGE = "Sheet1!A:J"
 
 # Make.com
 MAKE_WEBHOOK_URL = os.getenv("MAKE_WEBHOOK_URL")
@@ -27,6 +26,11 @@ MAKE_PIN_LINK = os.getenv("MAKE_PIN_LINK")  # ссылка на Telegram-кан�
 
 # Database
 DB_PATH = "syntx.db"
+
+# Google Drive (через rclone, remote = gdrive:)
+DRIVE_BASE_PATH = os.getenv("DRIVE_BASE_PATH", "PROJECTS/Автопостинг Syntx")
+DRIVE_FOLDER_REFS = "Референсы"
+DRIVE_FOLDER_GENS = "База генераций"
 
 # Generation
 IMAGES_PER_WEEK = 100
@@ -47,7 +51,3 @@ PINTEREST_FILE_TTL_DAYS = 30
 
 # Timezone
 TIMEZONE = "Europe/Moscow"
-
-# Google Drive folder names (root level)
-DRIVE_FOLDER_REFS = "Референсы"
-DRIVE_FOLDER_GENS = "База генераций"
