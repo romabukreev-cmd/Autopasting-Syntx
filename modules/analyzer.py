@@ -69,6 +69,7 @@ async def _analyze_image(image_data: bytes) -> dict:
             ],
         }],
         response_format={"type": "json_object"},
+        max_tokens=4000,
     )
     return json.loads(resp.choices[0].message.content)
 
