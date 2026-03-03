@@ -28,7 +28,7 @@ def admin_only(func):
 @admin_only
 async def cmd_start(message: Message):
     await message.answer(
-        "Контент-завод Syntex AI\n\n"
+        "Контент-завод Syntx\n\n"
         "Команды:\n"
         "/pinterest_analyze — анализ референсов\n"
         "/pinterest_generate N — генерация недели N\n"
