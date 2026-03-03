@@ -26,8 +26,17 @@ from modules import drive, overlay
 logger = logging.getLogger(__name__)
 
 
+def _is_image_only_model(model: str) -> bool:
+    """Image-only models (no text output) use modalities=["image"] and return data URL in content."""
+    image_only_prefixes = ("bytedance-seed/", "stability", "black-forest-labs/", "recraft-ai/")
+    return any(model.startswith(p) for p in image_only_prefixes)
+
+
 async def _generate_image(prompt: str, model: str) -> bytes:
     """Call OpenRouter chat/completions with modalities=image to get image bytes."""
+    image_only = _is_image_only_model(model)
+    modalities = ["image"] if image_only else ["image", "text"]
+
     async with httpx.AsyncClient(timeout=120) as http:
         resp = await http.post(
             f"{OPENROUTER_BASE_URL}/chat/completions",
@@ -38,16 +47,25 @@ async def _generate_image(prompt: str, model: str) -> bytes:
             json={
                 "model": model,
                 "messages": [{"role": "user", "content": prompt}],
-                "modalities": ["image", "text"],
+                "modalities": modalities,
                 "image_config": {"aspect_ratio": "2:3"},
             },
         )
     resp.raise_for_status()
     data = resp.json()
-    images = data["choices"][0]["message"].get("images", [])
-    if not images:
-        raise ValueError(f"No images in response. Content: {data['choices'][0]['message'].get('content', '')[:200]}")
-    url = images[0]["image_url"]["url"]  # data:image/png;base64,...
+    msg = data["choices"][0]["message"]
+
+    # Image-only models return data URL directly in content
+    if image_only:
+        url = msg.get("content", "")
+        if not url or not url.startswith("data:"):
+            raise ValueError(f"No image data in response content: {str(url)[:200]}")
+    else:
+        images = msg.get("images", [])
+        if not images:
+            raise ValueError(f"No images in response. Content: {msg.get('content', '')[:200]}")
+        url = images[0]["image_url"]["url"]
+
     _, b64 = url.split(",", 1)
     return base64.b64decode(b64)
 
