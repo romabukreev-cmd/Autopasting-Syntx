@@ -22,13 +22,18 @@ def kb_main():
     ])
 
 
-def kb_pinterest():
+def kb_pinterest(week: int = 1):
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Анализ референсов", callback_data="pin:analyze")],
-        [InlineKeyboardButton(text="Генерация (неделя 1)", callback_data="pin:generate:1")],
+        [
+            InlineKeyboardButton(text="◀", callback_data=f"pin:week:{max(1, week - 1)}"),
+            InlineKeyboardButton(text=f"Генерация — неделя {week}", callback_data=f"pin:generate:{week}"),
+            InlineKeyboardButton(text="▶", callback_data=f"pin:week:{week + 1}"),
+        ],
         [InlineKeyboardButton(text="Запустить постинг", callback_data="pin:start")],
         [InlineKeyboardButton(text="Повторить упавшие", callback_data="pin:retry")],
         [InlineKeyboardButton(text="Статус", callback_data="pin:status")],
+        [InlineKeyboardButton(text="Сбросить статусы", callback_data="pin:reset")],
         [InlineKeyboardButton(text="← Назад", callback_data="menu:main")],
     ])
 
@@ -75,19 +80,7 @@ async def cb_menu_main(call: CallbackQuery):
 async def cb_menu_pinterest(call: CallbackQuery):
     state = await get_state()
     week = state.get("active_week") or 1
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Анализ референсов", callback_data="pin:analyze")],
-        [
-            InlineKeyboardButton(text="◀", callback_data=f"pin:week:{max(1, week - 1)}"),
-            InlineKeyboardButton(text=f"Генерация — неделя {week}", callback_data=f"pin:generate:{week}"),
-            InlineKeyboardButton(text="▶", callback_data=f"pin:week:{week + 1}"),
-        ],
-        [InlineKeyboardButton(text="Запустить постинг", callback_data="pin:start")],
-        [InlineKeyboardButton(text="Повторить упавшие", callback_data="pin:retry")],
-        [InlineKeyboardButton(text="Статус", callback_data="pin:status")],
-        [InlineKeyboardButton(text="← Назад", callback_data="menu:main")],
-    ])
-    await call.message.edit_text("Pinterest", reply_markup=kb)
+    await call.message.edit_text("Pinterest", reply_markup=kb_pinterest(week))
 
 
 @router.callback_query(F.data == "menu:telegram")
@@ -109,19 +102,7 @@ async def cb_menu_vk(call: CallbackQuery):
 async def cb_week(call: CallbackQuery):
     week = int(call.data.split(":")[2])
     await set_state(active_week=week)
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Анализ референсов", callback_data="pin:analyze")],
-        [
-            InlineKeyboardButton(text="◀", callback_data=f"pin:week:{max(1, week - 1)}"),
-            InlineKeyboardButton(text=f"Генерация — неделя {week}", callback_data=f"pin:generate:{week}"),
-            InlineKeyboardButton(text="▶", callback_data=f"pin:week:{week + 1}"),
-        ],
-        [InlineKeyboardButton(text="Запустить постинг", callback_data="pin:start")],
-        [InlineKeyboardButton(text="Повторить упавшие", callback_data="pin:retry")],
-        [InlineKeyboardButton(text="Статус", callback_data="pin:status")],
-        [InlineKeyboardButton(text="← Назад", callback_data="menu:main")],
-    ])
-    await call.message.edit_reply_markup(reply_markup=kb)
+    await call.message.edit_reply_markup(reply_markup=kb_pinterest(week))
 
 
 # --- Pinterest actions ---
@@ -202,6 +183,16 @@ async def cb_status(call: CallbackQuery):
         lines.append(f"Окончание: {state['posting_end_date']}")
     await call.answer()
     await call.message.answer("\n".join(lines))
+
+
+@router.callback_query(F.data == "pin:reset")
+@admin_only
+async def cb_reset(call: CallbackQuery):
+    await set_state(analysis_status="idle", generation_status="idle", posting_status="idle")
+    await call.answer("Статусы сброшены", show_alert=True)
+    state = await get_state()
+    week = state.get("active_week") or 1
+    await call.message.edit_text("Pinterest", reply_markup=kb_pinterest(week))
 
 
 # --- Legacy text commands (still work) ---
