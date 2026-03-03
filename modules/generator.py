@@ -39,7 +39,7 @@ async def _generate_image(prompt: str, model: str) -> bytes:
                 "model": model,
                 "messages": [{"role": "user", "content": prompt}],
                 "modalities": ["image", "text"],
-                "image_config": {"aspect_ratio": "9:16"},
+                "image_config": {"aspect_ratio": "9:16"},  # vertical portrait, good for Pinterest
             },
         )
     resp.raise_for_status()
@@ -144,19 +144,16 @@ async def _get_week_prompts(week: int) -> list[dict]:
     return await _get_week_prompts(week)
 
 
-async def _process_one(gen_id: int, item: dict) -> tuple[bool, str, str]:
+async def _process_one(gen_id: int, item: dict) -> tuple[bool, bool]:
     """
-    Generate one image, apply overlay, upload to Drive.
-    Returns (success, clean_file_id, pin_file_id).
+    Generate image with BOTH models (GPT and NanaBana), apply overlay, upload to Drive.
+    Saves to gpt/ and nanobana/ subfolders.
+    Returns (success_gpt, success_nanobana).
     """
     category = item["category"]
     today = date.today().strftime("%Y-%m-%d")
     folder_name = f"{today}_{category}"
     base_path = f"{DRIVE_BASE_PATH}/{DRIVE_FOLDER_GENS}/{folder_name}"
-    clean_path = f"{base_path}/clean/gen_{gen_id:04d}.jpg"
-    pin_path = f"{base_path}/pinterest/gen_{gen_id:04d}.jpg"
-
-    model = MODEL_IMAGE_1 if gen_id % 2 == 1 else MODEL_IMAGE_2
 
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
@@ -164,28 +161,49 @@ async def _process_one(gen_id: int, item: dict) -> tuple[bool, str, str]:
         )
         await db.commit()
 
-    image_data = await _generate_with_retry(item["full"], model)
-    if image_data is None:
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute("UPDATE generations SET status = 'failed' WHERE id = ?", (gen_id,))
-            await db.commit()
-        return False, "", ""
+    success_gpt = False
+    success_nb = False
+    main_file_id = ""
+    main_pin_id = ""
 
-    # Upload clean version
-    clean_file_id = await drive.upload_file(image_data, clean_path)
+    # --- GPT image ---
+    gpt_data = await _generate_with_retry(item["full"], MODEL_IMAGE_1)
+    if gpt_data:
+        gpt_file_id = await drive.upload_file(gpt_data, f"{base_path}/gpt/gen_{gen_id:04d}.jpg")
+        gpt_pin = overlay.apply_overlay(gpt_data, item["short"])
+        gpt_pin_id = await drive.upload_file(gpt_pin, f"{base_path}/gpt_pin/gen_{gen_id:04d}.jpg")
+        success_gpt = True
+        main_file_id = gpt_file_id
+        main_pin_id = gpt_pin_id
+        logger.info(f"gen_{gen_id:04d} GPT: ok")
+    else:
+        logger.warning(f"gen_{gen_id:04d} GPT: failed")
 
-    # Create and upload pinterest version
-    pin_data = overlay.apply_overlay(image_data, item["short"])
-    pin_file_id = await drive.upload_file(pin_data, pin_path)
+    # --- Nano Banana image ---
+    nb_data = await _generate_with_retry(item["full"], MODEL_IMAGE_2)
+    if nb_data:
+        nb_file_id = await drive.upload_file(nb_data, f"{base_path}/nanobana/gen_{gen_id:04d}.jpg")
+        nb_pin = overlay.apply_overlay(nb_data, item["short"])
+        await drive.upload_file(nb_pin, f"{base_path}/nanobana_pin/gen_{gen_id:04d}.jpg")
+        success_nb = True
+        if not main_file_id:
+            main_file_id = nb_file_id
+        logger.info(f"gen_{gen_id:04d} NanaBana: ok")
+    else:
+        logger.warning(f"gen_{gen_id:04d} NanaBana: failed")
 
+    # Update DB
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute(
-            "UPDATE generations SET status = 'success', gdrive_file_id = ?, pinterest_file_id = ? WHERE id = ?",
-            (clean_file_id, pin_file_id, gen_id),
-        )
+        if success_gpt or success_nb:
+            await db.execute(
+                "UPDATE generations SET status = 'success', gdrive_file_id = ?, pinterest_file_id = ? WHERE id = ?",
+                (main_file_id, main_pin_id, gen_id),
+            )
+        else:
+            await db.execute("UPDATE generations SET status = 'failed' WHERE id = ?", (gen_id,))
         await db.commit()
 
-    return True, clean_file_id, pin_file_id
+    return success_gpt, success_nb
 
 
 async def run_generation(bot, chat_id: int, week: int):
@@ -201,30 +219,43 @@ async def run_generation(bot, chat_id: int, week: int):
         failed = 0
         progress_msg = await bot.send_message(chat_id, f"Генерация: 0/{total}")
 
+        gpt_ok = 0
+        nb_ok = 0
+        failed = 0
+
         for i, item in enumerate(items):
             gen_id = item.get("gen_id")
             if not gen_id:
                 continue
 
-            ok, _, _ = await _process_one(gen_id, item)
-            if ok:
-                success += 1
-            else:
+            ok_gpt, ok_nb = await _process_one(gen_id, item)
+            if ok_gpt:
+                gpt_ok += 1
+            if ok_nb:
+                nb_ok += 1
+            if not ok_gpt and not ok_nb:
                 failed += 1
 
             if (i + 1) % 5 == 0 or i + 1 == total:
-                await progress_msg.edit_text(f"Генерация: {i + 1}/{total}")
+                await progress_msg.edit_text(
+                    f"Генерация: {i + 1}/{total} | GPT: {gpt_ok} | NanaBana: {nb_ok}"
+                )
 
             await asyncio.sleep(DELAY_BETWEEN_GENERATIONS)
 
         status = "done" if failed == 0 else "partial"
         await set_state(generation_status=status)
 
-        text = f"Генерация завершена. Успешно: {success}/{total}. Упало: {failed}."
+        text = (
+            f"Генерация завершена.\n"
+            f"GPT: {gpt_ok}/{total} ✓\n"
+            f"NanaBana: {nb_ok}/{total} ✓\n"
+            f"Упало полностью: {failed}."
+        )
         if failed > 0:
             text += "\n\nЗапустить повтор → Pinterest → Повторить упавшие"
         else:
-            text += "\n\nПроверь изображения на Drive и запускай постинг → Pinterest → Запустить постинг"
+            text += "\n\nПроверь папки gpt/ и nanobana/ на Drive и запускай постинг"
 
         await bot.send_message(chat_id, text)
 
@@ -252,7 +283,8 @@ async def run_retry(bot, chat_id: int):
 
         total = len(failed_rows)
         progress_msg = await bot.send_message(chat_id, f"Повтор: 0/{total}")
-        success = 0
+        gpt_ok = 0
+        nb_ok = 0
 
         for i, row in enumerate(failed_rows):
             prompts = json.loads(row["prompts"])
@@ -272,17 +304,25 @@ async def run_retry(bot, chat_id: int):
                 )
                 await db.commit()
 
-            ok, _, _ = await _process_one(row["id"], item)
-            if ok:
-                success += 1
+            ok_gpt, ok_nb = await _process_one(row["id"], item)
+            if ok_gpt:
+                gpt_ok += 1
+            if ok_nb:
+                nb_ok += 1
 
             if (i + 1) % 5 == 0 or i + 1 == total:
-                await progress_msg.edit_text(f"Повтор: {i + 1}/{total}")
+                await progress_msg.edit_text(
+                    f"Повтор: {i + 1}/{total} | GPT: {gpt_ok} | NanaBana: {nb_ok}"
+                )
 
             await asyncio.sleep(DELAY_BETWEEN_GENERATIONS)
 
-        await set_state(generation_status="partial" if success < total else "done")
-        await bot.send_message(chat_id, f"Повторная генерация завершена. Успешно: {success}/{total}.")
+        any_success = gpt_ok + nb_ok
+        await set_state(generation_status="partial" if any_success < total * 2 else "done")
+        await bot.send_message(
+            chat_id,
+            f"Повторная генерация завершена.\nGPT: {gpt_ok}/{total} ✓\nNanaBana: {nb_ok}/{total} ✓"
+        )
 
     except Exception as e:
         logger.error(f"Retry failed: {e}")

@@ -24,47 +24,40 @@ logger = logging.getLogger(__name__)
 
 client = AsyncOpenAI(api_key=OPENROUTER_API_KEY, base_url=OPENROUTER_BASE_URL)
 
-ANALYZE_PROMPT = """You are analyzing a reference image that may contain a visible AI generation prompt (e.g. a Midjourney or Leonardo screenshot).
+ANALYZE_PROMPT = """You are analyzing a reference image to create image generation prompts.
 
-Your tasks:
-1. OCR: read any text visible on the image
-2. Visual description: describe style, composition, subjects, colors, mood — ignoring text overlays
-3. Decide on a flag:
-   - "match": OCR text clearly IS a generation prompt describing the visual
-   - "partial": OCR text partially relates to the visual (errors or incomplete)
-   - "no_match": no readable text, or text is unrelated to the visual
+Your task:
+1. Look carefully at the image. Describe the subject, style, composition, lighting, colors, mood in detail.
+2. Ignore any text, watermarks, UI badges, or overlay elements visible on the image.
+3. Write a complete, detailed generation prompt that would faithfully recreate this image.
+4. Create 5 variations of this prompt where ONLY the model's pose or camera angle changes.
+   Everything else must stay IDENTICAL: subject appearance, hair, clothes, colors, lighting, style, mood, background, quality settings.
 
-Return JSON only:
-{
-  "ocr_text": "...",
-  "visual_description": "...",
-  "flag": "match|partial|no_match",
-  "base_prompt": "..."
-}"""
+Variant rules:
+- Variant 1: exact original pose (unchanged)
+- Variant 2: different body pose (e.g., sitting, walking, different hands position)
+- Variant 3: different camera angle (e.g., side profile, three-quarter view, from behind)
+- Variant 4: different framing/distance (e.g., close-up portrait vs full body shot)
+- Variant 5: different pose detail (e.g., looking away, turned head, different arm position)
 
-VARIANTS_PROMPT = """You are a creative AI art director. Given a base image generation prompt, create 5 variations.
-
-Rules:
-- #1: original (unchanged)
-- #2: change gender/character type if applicable, keep composition
-- #3: change color palette significantly
-- #4: change pose/angle/perspective
-- #5: change style (e.g. photorealistic → cinematic, digital art → oil painting)
-
-For each variation provide:
+For each variant:
 - "full": complete prompt up to 1000 characters (for image generation)
 - "short": 80-120 character summary (for text overlay on image)
 
 Return JSON only:
 {
+  "base_prompt": "...",
   "variants": [
     {"full": "...", "short": "..."},
-    ...
+    {"full": "...", "short": "..."},
+    {"full": "...", "short": "..."},
+    {"full": "...", "short": "..."},
+    {"full": "...", "short": "..."}
   ]
 }"""
 
 
-async def _analyze_reference(image_data: bytes) -> dict:
+async def _analyze_image(image_data: bytes) -> dict:
     b64 = base64.b64encode(image_data).decode()
     resp = await client.chat.completions.create(
         model=MODEL_ANALYZER,
@@ -78,16 +71,6 @@ async def _analyze_reference(image_data: bytes) -> dict:
         response_format={"type": "json_object"},
     )
     return json.loads(resp.choices[0].message.content)
-
-
-async def _generate_variants(base_prompt: str) -> list[dict]:
-    resp = await client.chat.completions.create(
-        model=MODEL_ANALYZER,
-        messages=[{"role": "user", "content": f"{VARIANTS_PROMPT}\n\nBase prompt:\n{base_prompt}"}],
-        response_format={"type": "json_object"},
-    )
-    data = json.loads(resp.choices[0].message.content)
-    return data.get("variants", [])
 
 
 async def run_analysis(bot, chat_id: int):
@@ -134,7 +117,7 @@ async def run_analysis(bot, chat_id: int):
             if file_id not in existing:
                 to_process.append(ref)
             elif drive_md5 and drive_md5 != existing[file_id]:
-                to_process.append(ref)  # file replaced
+                to_process.append(ref)
             else:
                 skipped += 1
 
@@ -155,10 +138,15 @@ async def run_analysis(bot, chat_id: int):
                 data = await drive.download_file(ref["path"])
                 md5 = await drive.compute_md5(data)
 
-                analysis = await _analyze_reference(data)
-                base_prompt = analysis.get("base_prompt", "")
+                result = await _analyze_image(data)
+                variants = result.get("variants", [])
+                base_prompt = result.get("base_prompt", "")
 
-                variants = await _generate_variants(base_prompt)
+                # Log for debugging
+                logger.info(f"Analyzed '{ref['name']}': base_prompt={base_prompt[:150]}")
+                for i, v in enumerate(variants):
+                    logger.info(f"  Variant {i}: {v.get('full', '')[:120]}")
+
                 prompts_json = json.dumps(variants, ensure_ascii=False)
                 today = date.today().isoformat()
 
@@ -182,7 +170,7 @@ async def run_analysis(bot, chat_id: int):
 
         await bot.send_message(
             chat_id,
-            f"Готово. Создано {total_prompts} промптов ({processed} × 5).\n"
+            f"Готово. Создано {total_prompts} промптов ({processed} × 5 вариантов позы/ракурса).\n"
             f"Распределено по {weeks} неделям.\n\n"
             f"Запустить генерацию → Pinterest → Генерация неделя 1"
         )
