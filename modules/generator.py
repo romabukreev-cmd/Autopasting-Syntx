@@ -28,6 +28,14 @@ logger = logging.getLogger(__name__)
 
 async def _generate_image(prompt: str, model: str) -> bytes:
     """Call OpenRouter chat/completions with modalities=image to get image bytes."""
+    # Append neutral format hint to every prompt
+    effective_prompt = f"{prompt}\n\n[vertical 2:3 format]"
+
+    # For GPT models also pass size=1024x1536 (native 2:3) via image_config
+    image_config: dict = {"aspect_ratio": "2:3"}
+    if "gpt" in model.lower():
+        image_config["size"] = "1024x1536"
+
     async with httpx.AsyncClient(timeout=120) as http:
         resp = await http.post(
             f"{OPENROUTER_BASE_URL}/chat/completions",
@@ -39,7 +47,7 @@ async def _generate_image(prompt: str, model: str) -> bytes:
                 "model": model,
                 "messages": [{"role": "user", "content": effective_prompt}],
                 "modalities": ["image", "text"],
-                "image_config": {"aspect_ratio": "2:3"},
+                "image_config": image_config,
             },
         )
     resp.raise_for_status()
