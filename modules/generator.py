@@ -28,14 +28,6 @@ logger = logging.getLogger(__name__)
 
 async def _generate_image(prompt: str, model: str) -> bytes:
     """Call OpenRouter chat/completions with modalities=image to get image bytes."""
-    # Append neutral format hint to every prompt
-    effective_prompt = f"{prompt}\n\n[vertical 2:3 format]"
-
-    # For GPT models also pass size=1024x1536 (native 2:3) via image_config
-    image_config: dict = {"aspect_ratio": "2:3"}
-    if "gpt" in model.lower():
-        image_config["size"] = "1024x1536"
-
     async with httpx.AsyncClient(timeout=120) as http:
         resp = await http.post(
             f"{OPENROUTER_BASE_URL}/chat/completions",
@@ -45,9 +37,9 @@ async def _generate_image(prompt: str, model: str) -> bytes:
             },
             json={
                 "model": model,
-                "messages": [{"role": "user", "content": effective_prompt}],
+                "messages": [{"role": "user", "content": prompt}],
                 "modalities": ["image", "text"],
-                "image_config": image_config,
+                "image_config": {"aspect_ratio": "2:3"},
             },
         )
     resp.raise_for_status()
@@ -154,9 +146,9 @@ async def _get_week_prompts(week: int) -> list[dict]:
 
 async def _process_one(gen_id: int, item: dict) -> tuple[bool, bool]:
     """
-    Generate image with BOTH models (GPT and NanaBana), apply overlay, upload to Drive.
-    Saves to gpt/ and nanobana/ subfolders.
-    Returns (success_gpt, success_nanobana).
+    Generate image with BOTH models (SeeDream and NanaBana), apply overlay, upload to Drive.
+    Saves to seedream/ and nanobana/ subfolders.
+    Returns (success_model1, success_model2).
     """
     category = item["category"]
     today = date.today().strftime("%Y-%m-%d")
@@ -174,18 +166,18 @@ async def _process_one(gen_id: int, item: dict) -> tuple[bool, bool]:
     main_file_id = ""
     main_pin_id = ""
 
-    # --- GPT image ---
+    # --- SeeDream image ---
     gpt_data = await _generate_with_retry(item["full"], MODEL_IMAGE_1)
     if gpt_data:
-        gpt_file_id = await drive.upload_file(gpt_data, f"{base_path}/gpt/gen_{gen_id:04d}.jpg")
+        gpt_file_id = await drive.upload_file(gpt_data, f"{base_path}/seedream/gen_{gen_id:04d}.jpg")
         gpt_pin = overlay.apply_overlay(gpt_data, item["short"])
-        gpt_pin_id = await drive.upload_file(gpt_pin, f"{base_path}/gpt_pin/gen_{gen_id:04d}.jpg")
+        gpt_pin_id = await drive.upload_file(gpt_pin, f"{base_path}/seedream_pin/gen_{gen_id:04d}.jpg")
         success_gpt = True
         main_file_id = gpt_file_id
         main_pin_id = gpt_pin_id
-        logger.info(f"gen_{gen_id:04d} GPT: ok")
+        logger.info(f"gen_{gen_id:04d} SeeDream: ok")
     else:
-        logger.warning(f"gen_{gen_id:04d} GPT: failed")
+        logger.warning(f"gen_{gen_id:04d} SeeDream: failed")
 
     # --- Nano Banana image ---
     nb_data = await _generate_with_retry(item["full"], MODEL_IMAGE_2)
@@ -246,7 +238,7 @@ async def run_generation(bot, chat_id: int, week: int):
 
             if (i + 1) % 5 == 0 or i + 1 == total:
                 await progress_msg.edit_text(
-                    f"Генерация: {i + 1}/{total} | GPT: {gpt_ok} | NanaBana: {nb_ok}"
+                    f"Генерация: {i + 1}/{total} | SeeDream: {gpt_ok} | NanaBana: {nb_ok}"
                 )
 
             await asyncio.sleep(DELAY_BETWEEN_GENERATIONS)
@@ -256,14 +248,14 @@ async def run_generation(bot, chat_id: int, week: int):
 
         text = (
             f"Генерация завершена.\n"
-            f"GPT: {gpt_ok}/{total} ✓\n"
+            f"SeeDream: {gpt_ok}/{total} ✓\n"
             f"NanaBana: {nb_ok}/{total} ✓\n"
             f"Упало полностью: {failed}."
         )
         if failed > 0:
             text += "\n\nЗапустить повтор → Pinterest → Повторить упавшие"
         else:
-            text += "\n\nПроверь папки gpt/ и nanobana/ на Drive и запускай постинг"
+            text += "\n\nПроверь папки seedream/ и nanobana/ на Drive и запускай постинг"
 
         await bot.send_message(chat_id, text)
 
@@ -320,7 +312,7 @@ async def run_retry(bot, chat_id: int):
 
             if (i + 1) % 5 == 0 or i + 1 == total:
                 await progress_msg.edit_text(
-                    f"Повтор: {i + 1}/{total} | GPT: {gpt_ok} | NanaBana: {nb_ok}"
+                    f"Повтор: {i + 1}/{total} | SeeDream: {gpt_ok} | NanaBana: {nb_ok}"
                 )
 
             await asyncio.sleep(DELAY_BETWEEN_GENERATIONS)
@@ -329,7 +321,7 @@ async def run_retry(bot, chat_id: int):
         await set_state(generation_status="partial" if any_success < total * 2 else "done")
         await bot.send_message(
             chat_id,
-            f"Повторная генерация завершена.\nGPT: {gpt_ok}/{total} ✓\nNanaBana: {nb_ok}/{total} ✓"
+            f"Повторная генерация завершена.\nSeeDream: {gpt_ok}/{total} ✓\nNanaBana: {nb_ok}/{total} ✓"
         )
 
     except Exception as e:
