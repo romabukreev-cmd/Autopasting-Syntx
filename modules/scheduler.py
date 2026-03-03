@@ -7,6 +7,16 @@ from datetime import date, datetime, timedelta
 import aiosqlite
 import pytz
 
+# Set by main.py before scheduler starts
+_bot = None
+_admin_chat_id = None
+
+
+async def publish_due_pins_job():
+    """Wrapper without args — APScheduler calls this every minute."""
+    if _bot and _admin_chat_id:
+        await publish_due_pins(_bot, _admin_chat_id)
+
 from config import (
     DB_PATH,
     DELAY_MAKE_WEBHOOK,

@@ -4,11 +4,11 @@ import logging
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 
-from config import BOT_TOKEN, DB_PATH, TIMEZONE
+from config import BOT_TOKEN, ADMIN_USER_ID, TIMEZONE
 from database import init_db
 from modules.bot import router
+import modules.scheduler as sched_module
 
 logging.basicConfig(
     level=logging.INFO,
@@ -24,25 +24,24 @@ async def main():
     dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(router)
 
-    jobstores = {"default": SQLAlchemyJobStore(url=f"sqlite:///{DB_PATH}")}
-    scheduler = AsyncIOScheduler(jobstores=jobstores, timezone=TIMEZONE)
+    # Store bot reference for scheduler jobs to use
+    sched_module._bot = bot
+    sched_module._admin_chat_id = ADMIN_USER_ID
 
-    from config import ADMIN_USER_ID
-    from modules.scheduler import publish_due_pins, cleanup_old_pinterest_files
+    # Use memory jobstore — recurring jobs are re-registered on each start.
+    # Actual pin schedule is persisted in SQLite pins_schedule table.
+    scheduler = AsyncIOScheduler(timezone=TIMEZONE)
 
-    # Publish due pins every minute
     scheduler.add_job(
-        publish_due_pins,
+        sched_module.publish_due_pins_job,
         trigger="interval",
         minutes=1,
-        args=[bot, ADMIN_USER_ID],
         id="publish_due_pins",
         replace_existing=True,
     )
 
-    # Daily cleanup of old pinterest files (03:00 МСК)
     scheduler.add_job(
-        cleanup_old_pinterest_files,
+        sched_module.cleanup_old_pinterest_files,
         trigger="cron",
         hour=3,
         minute=0,
@@ -54,7 +53,7 @@ async def main():
 
     logger.info("Bot started")
     try:
-        await dp.start_polling(bot, scheduler=scheduler)
+        await dp.start_polling(bot)
     finally:
         scheduler.shutdown()
         await bot.session.close()
