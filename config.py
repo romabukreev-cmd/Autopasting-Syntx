@@ -29,7 +29,7 @@ DB_PATH = "syntx.db"
 
 # Google Drive (через rclone, remote = gdrive:)
 DRIVE_BASE_PATH = os.getenv("DRIVE_BASE_PATH", "PROJECTS/Автопостинг Syntx")
-DRIVE_FOLDER_REFS = "Референсы"
+DRIVE_FOLDER_REFS = "Референс"
 DRIVE_FOLDER_GENS = "База генераций"
 
 # Generation
