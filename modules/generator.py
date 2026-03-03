@@ -5,7 +5,7 @@ import logging
 from datetime import date
 
 import aiosqlite
-from openai import AsyncOpenAI
+import httpx
 
 from config import (
     DB_PATH,
@@ -25,18 +25,30 @@ from modules import drive, overlay
 
 logger = logging.getLogger(__name__)
 
-client = AsyncOpenAI(api_key=OPENROUTER_API_KEY, base_url=OPENROUTER_BASE_URL)
-
 
 async def _generate_image(prompt: str, model: str) -> bytes:
-    resp = await client.images.generate(
-        model=model,
-        prompt=prompt,
-        size="832x1248",
-        response_format="b64_json",
-        n=1,
-    )
-    b64 = resp.data[0].b64_json
+    """Call OpenRouter chat/completions with modalities=image to get image bytes."""
+    async with httpx.AsyncClient(timeout=120) as http:
+        resp = await http.post(
+            f"{OPENROUTER_BASE_URL}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "modalities": ["image", "text"],
+                "image_config": {"aspect_ratio": "9:16"},
+            },
+        )
+    resp.raise_for_status()
+    data = resp.json()
+    images = data["choices"][0]["message"].get("images", [])
+    if not images:
+        raise ValueError(f"No images in response. Content: {data['choices'][0]['message'].get('content', '')[:200]}")
+    url = images[0]["image_url"]["url"]  # data:image/png;base64,...
+    _, b64 = url.split(",", 1)
     return base64.b64decode(b64)
 
 
