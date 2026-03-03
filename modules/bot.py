@@ -192,7 +192,10 @@ async def cb_reset(call: CallbackQuery):
     await call.answer("Статусы сброшены", show_alert=True)
     state = await get_state()
     week = state.get("active_week") or 1
-    await call.message.edit_text("Pinterest", reply_markup=kb_pinterest(week))
+    try:
+        await call.message.edit_text("Pinterest", reply_markup=kb_pinterest(week))
+    except Exception:
+        pass
 
 
 # --- Legacy text commands (still work) ---
