@@ -3,7 +3,11 @@ import logging
 
 from aiogram import Router, F
 from aiogram.filters import Command
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import (
+    Message, CallbackQuery,
+    InlineKeyboardMarkup, InlineKeyboardButton,
+    ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove,
+)
 
 from config import ADMIN_USER_ID
 from database import get_state, set_state
@@ -33,7 +37,10 @@ def kb_pinterest(week: int = 1):
         [InlineKeyboardButton(text="Запустить постинг", callback_data="pin:start")],
         [InlineKeyboardButton(text="Повторить упавшие", callback_data="pin:retry")],
         [InlineKeyboardButton(text="Статус", callback_data="pin:status")],
-        [InlineKeyboardButton(text="Сбросить статусы", callback_data="pin:reset")],
+        [
+            InlineKeyboardButton(text="Сбросить статусы", callback_data="pin:reset"),
+            InlineKeyboardButton(text="🗑 Очистить всё", callback_data="pin:clear"),
+        ],
         [InlineKeyboardButton(text="← Назад", callback_data="menu:main")],
     ])
 
@@ -42,6 +49,18 @@ def kb_soon():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="← Назад", callback_data="menu:main")],
     ])
+
+
+def kb_reply_main():
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="Pinterest"), KeyboardButton(text="Telegram"), KeyboardButton(text="ВКонтакте")],
+        ],
+        resize_keyboard=True,
+        persistent=True,
+    )
+
+
 
 
 # --- Admin guard ---
@@ -64,7 +83,8 @@ def admin_only(func):
 @router.message(Command("start"))
 @admin_only
 async def cmd_start(message: Message):
-    await message.answer("Контент-завод Syntx\n\nВыбери площадку:", reply_markup=kb_main())
+    await message.answer("Контент-завод Syntx", reply_markup=kb_reply_main())
+    await message.answer("Выбери площадку:", reply_markup=kb_main())
 
 
 # --- Main menu navigation ---
@@ -275,3 +295,69 @@ async def cmd_retry(message: Message):
     await message.answer("Запускаю повторную генерацию для упавших изображений...")
     from modules.generator import run_retry
     asyncio.create_task(run_retry(message.bot, message.chat.id))
+
+
+# --- pin:clear — wipe Drive generations + DB ---
+
+@router.callback_query(F.data == "pin:clear")
+@admin_only
+async def cb_clear(call: CallbackQuery):
+    await call.answer("Очищаю...", show_alert=False)
+    await call.message.answer("Очищаю базу и папки генераций на Drive...")
+    import aiosqlite
+    from config import DB_PATH, DRIVE_BASE_PATH, DRIVE_FOLDER_GENS
+    from modules import drive
+
+    try:
+        # Purge Drive generations folder
+        gens_path = f"{DRIVE_BASE_PATH}/{DRIVE_FOLDER_GENS}"
+        await drive.purge_folder(gens_path)
+
+        # Clear DB tables
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("DELETE FROM generations")
+            await db.execute("DELETE FROM pins_schedule")
+            await db.commit()
+
+        # Reset statuses
+        await set_state(
+            analysis_status="idle",
+            generation_status="idle",
+            posting_status="idle",
+            posting_start_date=None,
+            posting_end_date=None,
+        )
+
+        state = await get_state()
+        week = state.get("active_week") or 1
+        await call.message.answer("Готово. Генерации и расписание очищены. Референсы сохранены.")
+        try:
+            await call.message.edit_text("Pinterest", reply_markup=kb_pinterest(week))
+        except Exception:
+            pass
+
+    except Exception as e:
+        logger.error(f"Clear failed: {e}")
+        await call.message.answer(f"Ошибка при очистке: {e}")
+
+
+# --- Reply keyboard text handlers ---
+
+@router.message(F.text == "Pinterest")
+@admin_only
+async def reply_pinterest(message: Message):
+    state = await get_state()
+    week = state.get("active_week") or 1
+    await message.answer("Pinterest", reply_markup=kb_pinterest(week))
+
+
+@router.message(F.text == "Telegram")
+@admin_only
+async def reply_telegram(message: Message):
+    await message.answer("Telegram — скоро", reply_markup=kb_soon())
+
+
+@router.message(F.text == "ВКонтакте")
+@admin_only
+async def reply_vk(message: Message):
+    await message.answer("ВКонтакте — скоро", reply_markup=kb_soon())

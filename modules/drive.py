@@ -112,6 +112,17 @@ async def mkdir(remote_path: str):
     await _rclone("mkdir", _remote(remote_path))
 
 
+async def purge_folder(path: str):
+    """Delete entire folder and all its contents from Drive. Silently ignores if not found."""
+    try:
+        await _rclone("purge", _remote(path))
+    except RuntimeError as e:
+        if "directory not found" in str(e).lower() or "not found" in str(e).lower():
+            pass
+        else:
+            raise
+
+
 async def get_file_id(remote_path: str) -> str:
     """Get Google Drive file ID by path."""
     parent = "/".join(remote_path.split("/")[:-1])

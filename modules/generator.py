@@ -37,7 +37,7 @@ async def _generate_image(prompt: str, model: str) -> bytes:
             },
             json={
                 "model": model,
-                "messages": [{"role": "user", "content": prompt}],
+                "messages": [{"role": "user", "content": effective_prompt}],
                 "modalities": ["image", "text"],
                 "image_config": {"aspect_ratio": "2:3"},
             },
