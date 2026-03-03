@@ -39,7 +39,7 @@ async def _generate_image(prompt: str, model: str) -> bytes:
                 "model": model,
                 "messages": [{"role": "user", "content": prompt}],
                 "modalities": ["image", "text"],
-                "image_config": {"aspect_ratio": "9:16"},  # vertical portrait, good for Pinterest
+                "image_config": {"aspect_ratio": "2:3"},
             },
         )
     resp.raise_for_status()
