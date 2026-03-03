@@ -27,15 +27,17 @@ logger = logging.getLogger(__name__)
 
 
 def _is_image_only_model(model: str) -> bool:
-    """Image-only models (no text output) use modalities=["image"] and return data URL in content."""
+    """Image-only models use modalities=["image"] (no text output)."""
     image_only_prefixes = ("bytedance-seed/", "stability", "black-forest-labs/", "recraft-ai/")
     return any(model.startswith(p) for p in image_only_prefixes)
 
 
 async def _generate_image(prompt: str, model: str) -> bytes:
-    """Call OpenRouter chat/completions with modalities=image to get image bytes."""
-    image_only = _is_image_only_model(model)
-    modalities = ["image"] if image_only else ["image", "text"]
+    """Call OpenRouter chat/completions with modalities=image to get image bytes.
+    All models return image in message.images[].image_url.url (base64 data URL).
+    Image-only models (SeeDream etc) require modalities=["image"] instead of ["image","text"].
+    """
+    modalities = ["image"] if _is_image_only_model(model) else ["image", "text"]
 
     async with httpx.AsyncClient(timeout=120) as http:
         resp = await http.post(
@@ -55,17 +57,10 @@ async def _generate_image(prompt: str, model: str) -> bytes:
     data = resp.json()
     msg = data["choices"][0]["message"]
 
-    # Image-only models return data URL directly in content
-    if image_only:
-        url = msg.get("content", "")
-        if not url or not url.startswith("data:"):
-            raise ValueError(f"No image data in response content: {str(url)[:200]}")
-    else:
-        images = msg.get("images", [])
-        if not images:
-            raise ValueError(f"No images in response. Content: {msg.get('content', '')[:200]}")
-        url = images[0]["image_url"]["url"]
-
+    images = msg.get("images", [])
+    if not images:
+        raise ValueError(f"No images in response. Content: {str(msg.get('content', ''))[:300]}")
+    url = images[0]["image_url"]["url"]
     _, b64 = url.split(",", 1)
     return base64.b64decode(b64)
 
@@ -170,6 +165,9 @@ async def _process_one(gen_id: int, item: dict, week: int) -> tuple[bool, bool]:
     """
     category = item["category"]
     base_path = f"{DRIVE_BASE_PATH}/{DRIVE_FOLDER_GENS}/week_{week}/{category}"
+
+    logger.info(f"gen_{gen_id:04d} prompt_full: {item['full'][:120]}")
+    logger.info(f"gen_{gen_id:04d} prompt_short: {item['short']}")
 
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
