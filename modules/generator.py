@@ -34,10 +34,7 @@ def _is_image_only_model(model: str) -> bool:
 
 
 async def _generate_image(prompt: str, model: str) -> bytes:
-    """Call OpenRouter chat/completions with modalities=image to get image bytes.
-    All models return image in message.images[].image_url.url (base64 data URL).
-    Image-only models (SeeDream etc) require modalities=["image"] instead of ["image","text"].
-    """
+    """Call OpenRouter chat/completions with modalities=image to get image bytes."""
     modalities = ["image"] if _is_image_only_model(model) else ["image", "text"]
 
     async with httpx.AsyncClient(timeout=120) as http:
@@ -77,35 +74,25 @@ async def _generate_with_retry(prompt: str, model: str) -> bytes | None:
     return None
 
 
-def _interleave_prompts(refs: list) -> list[dict]:
-    """Round-robin by category so categories alternate."""
-    by_category: dict[str, list] = {}
+def _build_prompt_queue(refs: list) -> list[dict]:
+    """Linear order — 1 prompt per ref, no interleaving."""
+    queue = []
     for ref in refs:
-        cat = ref["category"]
         prompts = json.loads(ref["prompts"])
         for i, p in enumerate(prompts):
-            by_category.setdefault(cat, []).append({
+            queue.append({
                 "ref_id": ref["id"],
-                "category": cat,
+                "category": ref["category"],
                 "prompt_index": i,
                 "full": p.get("full", ""),
                 "short": p.get("short", ""),
             })
-
-    queue = []
-    cats = list(by_category.keys())
-    max_len = max((len(v) for v in by_category.values()), default=0)
-    for i in range(max_len):
-        for cat in cats:
-            if i < len(by_category[cat]):
-                queue.append(by_category[cat][i])
     return queue
 
 
 async def _get_week_prompts(week: int) -> list[dict]:
     offset = (week - 1) * IMAGES_PER_WEEK
 
-    # Check if week already scheduled
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
@@ -136,11 +123,10 @@ async def _get_week_prompts(week: int) -> list[dict]:
                         })
             return result
 
-        # Build week from all refs
         async with db.execute("SELECT id, category, prompts FROM refs ORDER BY id") as cur:
             all_refs = [dict(r) for r in await cur.fetchall()]
 
-    prompt_queue = _interleave_prompts(all_refs)
+    prompt_queue = _build_prompt_queue(all_refs)
     week_slice = prompt_queue[offset: offset + IMAGES_PER_WEEK]
 
     if not week_slice:
@@ -160,15 +146,16 @@ async def _get_week_prompts(week: int) -> list[dict]:
 
 async def _process_one(gen_id: int, item: dict, week: int) -> tuple[bool, bool]:
     """
-    Generate image with BOTH models (SeeDream and NanaBana), apply overlay, upload to Drive.
+    Generate GENERATIONS_PER_PROMPT images with each model, apply overlay, upload to Drive.
+    All files recorded in generation_files table.
     Structure: База генераций / week_{week} / {category} / seedream|nanobana|*_pin /
-    Returns (success_seedream, success_nanobana).
     """
+    ref_id = item["ref_id"]
     category = item["category"]
     base_path = f"{DRIVE_BASE_PATH}/{DRIVE_FOLDER_GENS}/week_{week}/{category}"
 
-    logger.info(f"gen_{gen_id:04d} prompt_full: {item['full']}")
-    logger.info(f"gen_{gen_id:04d} prompt_short: {item['short']}")
+    logger.info(f"gen_{gen_id:04d} ref_id={ref_id} prompt: {item['full']}")
+    logger.info(f"gen_{gen_id:04d} short: {item['short']}")
 
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
@@ -178,19 +165,29 @@ async def _process_one(gen_id: int, item: dict, week: int) -> tuple[bool, bool]:
 
     sd_ok = 0
     nb_ok = 0
-    last_sd_pin_id = ""
-    last_nb_pin_id = ""
-    last_sd_file_id = ""
+
+    async def _save_file(data: bytes, path: str, model: str, ftype: str, fname: str):
+        """Upload file and record in generation_files."""
+        file_id = await drive.upload_file(data, path)
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                "INSERT INTO generation_files (generation_id, ref_id, model, type, gdrive_file_id, filename) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (gen_id, ref_id, model, ftype, file_id, fname),
+            )
+            await db.commit()
+        return file_id
 
     # --- SeeDream: GENERATIONS_PER_PROMPT images ---
     for n in range(GENERATIONS_PER_PROMPT):
         sd_data = await _generate_with_retry(item["full"], MODEL_IMAGE_1)
         if sd_data:
-            fid = await drive.upload_file(sd_data, f"{base_path}/seedream/gen_{gen_id:04d}_{n+1}.jpg")
+            fname = f"gen_{gen_id:04d}_{n+1}.jpg"
+            clean_path = f"{base_path}/seedream/{fname}"
+            pin_path = f"{base_path}/seedream_pin/{fname}"
+            await _save_file(sd_data, clean_path, "seedream", "clean", clean_path)
             sd_pin = overlay.apply_overlay(sd_data, item["short"])
-            pid = await drive.upload_file(sd_pin, f"{base_path}/seedream_pin/gen_{gen_id:04d}_{n+1}.jpg")
-            last_sd_file_id = fid
-            last_sd_pin_id = pid
+            await _save_file(sd_pin, pin_path, "seedream", "pin", pin_path)
             sd_ok += 1
             logger.info(f"gen_{gen_id:04d} SeeDream {n+1}/{GENERATIONS_PER_PROMPT}: ok")
         else:
@@ -201,31 +198,24 @@ async def _process_one(gen_id: int, item: dict, week: int) -> tuple[bool, bool]:
     for n in range(GENERATIONS_PER_PROMPT):
         nb_data = await _generate_with_retry(item["full"], MODEL_IMAGE_2)
         if nb_data:
-            await drive.upload_file(nb_data, f"{base_path}/nanobana/gen_{gen_id:04d}_{n+1}.jpg")
+            fname = f"gen_{gen_id:04d}_{n+1}.jpg"
+            clean_path = f"{base_path}/nanobana/{fname}"
+            pin_path = f"{base_path}/nanobana_pin/{fname}"
+            await _save_file(nb_data, clean_path, "nanobana", "clean", clean_path)
             nb_pin = overlay.apply_overlay(nb_data, item["short"])
-            pid = await drive.upload_file(nb_pin, f"{base_path}/nanobana_pin/gen_{gen_id:04d}_{n+1}.jpg")
-            last_nb_pin_id = pid
+            await _save_file(nb_pin, pin_path, "nanobana", "pin", pin_path)
             nb_ok += 1
             logger.info(f"gen_{gen_id:04d} NanaBana {n+1}/{GENERATIONS_PER_PROMPT}: ok")
         else:
             logger.warning(f"gen_{gen_id:04d} NanaBana {n+1}/{GENERATIONS_PER_PROMPT}: failed")
         await asyncio.sleep(DELAY_BETWEEN_GENERATIONS)
 
-    success_sd = sd_ok > 0
-    success_nb = nb_ok > 0
-
     async with aiosqlite.connect(DB_PATH) as db:
-        if success_sd or success_nb:
-            await db.execute(
-                "UPDATE generations SET status = 'success', gdrive_file_id = ?, "
-                "pinterest_file_id = ?, nb_pinterest_file_id = ? WHERE id = ?",
-                (last_sd_file_id, last_sd_pin_id, last_nb_pin_id, gen_id),
-            )
-        else:
-            await db.execute("UPDATE generations SET status = 'failed' WHERE id = ?", (gen_id,))
+        status = "success" if (sd_ok > 0 or nb_ok > 0) else "failed"
+        await db.execute("UPDATE generations SET status = ? WHERE id = ?", (status, gen_id))
         await db.commit()
 
-    return success_sd, success_nb
+    return sd_ok > 0, nb_ok > 0
 
 
 async def run_generation(bot, chat_id: int, week: int):
@@ -237,30 +227,27 @@ async def run_generation(bot, chat_id: int, week: int):
             return
 
         total = len(items)
-        success = 0
-        failed = 0
-        progress_msg = await bot.send_message(chat_id, f"Генерация: 0/{total}")
-
-        gpt_ok = 0
+        sd_ok = 0
         nb_ok = 0
         failed = 0
+        progress_msg = await bot.send_message(chat_id, f"Генерация: 0/{total}")
 
         for i, item in enumerate(items):
             gen_id = item.get("gen_id")
             if not gen_id:
                 continue
 
-            ok_gpt, ok_nb = await _process_one(gen_id, item, week)
-            if ok_gpt:
-                gpt_ok += 1
+            ok_sd, ok_nb = await _process_one(gen_id, item, week)
+            if ok_sd:
+                sd_ok += 1
             if ok_nb:
                 nb_ok += 1
-            if not ok_gpt and not ok_nb:
+            if not ok_sd and not ok_nb:
                 failed += 1
 
-            if (i + 1) % 5 == 0 or i + 1 == total:
+            if (i + 1) % 1 == 0 or i + 1 == total:
                 await progress_msg.edit_text(
-                    f"Генерация: {i + 1}/{total} | SeeDream: {gpt_ok} | NanaBana: {nb_ok}"
+                    f"Генерация: {i + 1}/{total} | SeeDream: {sd_ok * GENERATIONS_PER_PROMPT} | NanaBana: {nb_ok * GENERATIONS_PER_PROMPT}"
                 )
 
             await asyncio.sleep(DELAY_BETWEEN_GENERATIONS)
@@ -268,16 +255,18 @@ async def run_generation(bot, chat_id: int, week: int):
         status = "done" if failed == 0 else "partial"
         await set_state(generation_status=status)
 
+        total_images = (sd_ok + nb_ok) * GENERATIONS_PER_PROMPT
         text = (
             f"Генерация завершена.\n"
-            f"SeeDream: {gpt_ok}/{total} ✓\n"
-            f"NanaBana: {nb_ok}/{total} ✓\n"
-            f"Упало полностью: {failed}."
+            f"SeeDream: {sd_ok * GENERATIONS_PER_PROMPT}/{total * GENERATIONS_PER_PROMPT} ✓\n"
+            f"NanaBana: {nb_ok * GENERATIONS_PER_PROMPT}/{total * GENERATIONS_PER_PROMPT} ✓\n"
+            f"Итого изображений: {total_images}\n"
+            f"Упало полностью: {failed} рефов."
         )
         if failed > 0:
             text += "\n\nЗапустить повтор → Pinterest → Повторить упавшие"
         else:
-            text += "\n\nПроверь папки seedream/ и nanobana/ на Drive и запускай постинг"
+            text += "\n\nЗапустить постинг → Pinterest → Запустить постинг"
 
         await bot.send_message(chat_id, text)
 
@@ -305,7 +294,7 @@ async def run_retry(bot, chat_id: int):
 
         total = len(failed_rows)
         progress_msg = await bot.send_message(chat_id, f"Повтор: 0/{total}")
-        gpt_ok = 0
+        sd_ok = 0
         nb_ok = 0
 
         for i, row in enumerate(failed_rows):
@@ -315,6 +304,7 @@ async def run_retry(bot, chat_id: int):
             p = prompts[row["prompt_index"]]
             item = {
                 "gen_id": row["id"],
+                "ref_id": row["reference_id"],
                 "category": row["category"],
                 "full": p.get("full", ""),
                 "short": p.get("short", ""),
@@ -326,24 +316,24 @@ async def run_retry(bot, chat_id: int):
                 )
                 await db.commit()
 
-            ok_gpt, ok_nb = await _process_one(row["id"], item, row["week_number"])
-            if ok_gpt:
-                gpt_ok += 1
+            ok_sd, ok_nb = await _process_one(row["id"], item, row["week_number"])
+            if ok_sd:
+                sd_ok += 1
             if ok_nb:
                 nb_ok += 1
 
-            if (i + 1) % 5 == 0 or i + 1 == total:
+            if (i + 1) % 1 == 0 or i + 1 == total:
                 await progress_msg.edit_text(
-                    f"Повтор: {i + 1}/{total} | SeeDream: {gpt_ok} | NanaBana: {nb_ok}"
+                    f"Повтор: {i + 1}/{total} | SeeDream: {sd_ok} | NanaBana: {nb_ok}"
                 )
 
             await asyncio.sleep(DELAY_BETWEEN_GENERATIONS)
 
-        any_success = gpt_ok + nb_ok
+        any_success = sd_ok + nb_ok
         await set_state(generation_status="partial" if any_success < total * 2 else "done")
         await bot.send_message(
             chat_id,
-            f"Повторная генерация завершена.\nSeeDream: {gpt_ok}/{total} ✓\nNanaBana: {nb_ok}/{total} ✓"
+            f"Повторная генерация завершена.\nSeeDream: {sd_ok}/{total} ✓\nNanaBana: {nb_ok}/{total} ✓"
         )
 
     except Exception as e:

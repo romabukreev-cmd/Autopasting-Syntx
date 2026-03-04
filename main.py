@@ -41,6 +41,14 @@ async def main():
     )
 
     scheduler.add_job(
+        sched_module.publish_due_tg_posts_job,
+        trigger="interval",
+        minutes=1,
+        id="publish_due_tg_posts",
+        replace_existing=True,
+    )
+
+    scheduler.add_job(
         sched_module.cleanup_old_pinterest_files,
         trigger="cron",
         hour=3,

@@ -104,10 +104,43 @@ async def cb_menu_pinterest(call: CallbackQuery):
     await call.message.edit_text("Pinterest", reply_markup=kb_pinterest(week))
 
 
+def kb_telegram():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="Статус ТГ-постинга", callback_data="tg:status")],
+        [InlineKeyboardButton(text="← Назад", callback_data="menu:main")],
+    ])
+
+
 @router.callback_query(F.data == "menu:telegram")
 @admin_only
 async def cb_menu_telegram(call: CallbackQuery):
-    await call.message.edit_text("Telegram — скоро", reply_markup=kb_soon())
+    await call.message.edit_text("Telegram", reply_markup=kb_telegram())
+
+
+@router.callback_query(F.data == "tg:status")
+@admin_only
+async def cb_tg_status(call: CallbackQuery):
+    import aiosqlite
+    from config import DB_PATH
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT COUNT(*) as total, "
+            "SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) as pending, "
+            "SUM(CASE WHEN status='posted' THEN 1 ELSE 0 END) as posted "
+            "FROM tg_posts"
+        ) as cur:
+            row = await cur.fetchone()
+    total = row["total"] or 0
+    pending = row["pending"] or 0
+    posted = row["posted"] or 0
+    await call.answer()
+    await call.message.answer(
+        f"Telegram постинг\n\n"
+        f"Всего постов: {total}\n"
+        f"Ожидают публикации: {pending}\n"
+        f"Опубликовано: {posted}"
+    )
 
 
 @router.callback_query(F.data == "menu:vk")
@@ -310,8 +343,10 @@ async def cb_clear(call: CallbackQuery):
 
         # Clear DB tables
         async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("DELETE FROM generation_files")
             await db.execute("DELETE FROM generations")
             await db.execute("DELETE FROM pins_schedule")
+            await db.execute("DELETE FROM tg_posts")
             await db.commit()
 
         # Reset statuses
@@ -349,7 +384,7 @@ async def reply_pinterest(message: Message):
 @router.message(F.text == "Telegram")
 @admin_only
 async def reply_telegram(message: Message):
-    await message.answer("Telegram — скоро", reply_markup=kb_soon())
+    await message.answer("Telegram", reply_markup=kb_telegram())
 
 
 @router.message(F.text == "ВКонтакте")

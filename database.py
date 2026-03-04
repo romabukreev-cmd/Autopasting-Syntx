@@ -24,30 +24,47 @@ async def init_db():
                 week_number INTEGER NOT NULL,
                 attempt_count INTEGER NOT NULL DEFAULT 0,
                 status TEXT NOT NULL DEFAULT 'pending',
-                gdrive_file_id TEXT,
-                pinterest_file_id TEXT,
-                nb_pinterest_file_id TEXT,
                 FOREIGN KEY (reference_id) REFERENCES refs(id)
             )
         """)
-        # Migration: add nb_pinterest_file_id if missing (existing DB)
-        try:
-            await db.execute("ALTER TABLE generations ADD COLUMN nb_pinterest_file_id TEXT")
-            await db.commit()
-        except Exception:
-            pass
+
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS generation_files (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                generation_id INTEGER NOT NULL,
+                ref_id INTEGER NOT NULL,
+                model TEXT NOT NULL,
+                type TEXT NOT NULL,
+                gdrive_file_id TEXT NOT NULL,
+                filename TEXT NOT NULL,
+                FOREIGN KEY (generation_id) REFERENCES generations(id),
+                FOREIGN KEY (ref_id) REFERENCES refs(id)
+            )
+        """)
 
         await db.execute("""
             CREATE TABLE IF NOT EXISTS pins_schedule (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                generation_id INTEGER NOT NULL,
+                generation_file_id INTEGER,
+                ref_id INTEGER,
                 gdrive_file_id TEXT NOT NULL,
                 category TEXT NOT NULL,
                 board_id TEXT NOT NULL,
                 scheduled_at TEXT NOT NULL,
                 status TEXT NOT NULL DEFAULT 'pending',
-                published_at TEXT,
-                FOREIGN KEY (generation_id) REFERENCES generations(id)
+                published_at TEXT
+            )
+        """)
+
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS tg_posts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ref_id INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                scenario INTEGER,
+                scheduled_at TEXT NOT NULL,
+                posted_at TEXT,
+                FOREIGN KEY (ref_id) REFERENCES refs(id)
             )
         """)
 
@@ -58,10 +75,20 @@ async def init_db():
                 analysis_status TEXT NOT NULL DEFAULT 'idle',
                 generation_status TEXT NOT NULL DEFAULT 'idle',
                 posting_status TEXT NOT NULL DEFAULT 'idle',
+                tg_posting_status TEXT NOT NULL DEFAULT 'idle',
                 posting_start_date TEXT,
                 posting_end_date TEXT
             )
         """)
+
+        # Migrations for existing DBs
+        for col, definition in [
+            ("tg_posting_status", "TEXT NOT NULL DEFAULT 'idle'"),
+        ]:
+            try:
+                await db.execute(f"ALTER TABLE bot_state ADD COLUMN {col} {definition}")
+            except Exception:
+                pass
 
         await db.execute("INSERT OR IGNORE INTO bot_state (id) VALUES (1)")
         await db.commit()
