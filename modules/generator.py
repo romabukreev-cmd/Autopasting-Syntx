@@ -166,7 +166,7 @@ async def _process_one(gen_id: int, item: dict, week: int) -> tuple[bool, bool]:
     category = item["category"]
     base_path = f"{DRIVE_BASE_PATH}/{DRIVE_FOLDER_GENS}/week_{week}/{category}"
 
-    logger.info(f"gen_{gen_id:04d} prompt_full: {item['full'][:120]}")
+    logger.info(f"gen_{gen_id:04d} prompt_full: {item['full']}")
     logger.info(f"gen_{gen_id:04d} prompt_short: {item['short']}")
 
     async with aiosqlite.connect(DB_PATH) as db:
