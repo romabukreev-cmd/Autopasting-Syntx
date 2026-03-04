@@ -26,23 +26,25 @@ client = AsyncOpenAI(api_key=OPENROUTER_API_KEY, base_url=OPENROUTER_BASE_URL)
 
 ANALYZE_PROMPT = """You are analyzing a reference image to create image generation prompts.
 
-Your task:
-1. Look carefully at the image. Describe the subject, style, composition, lighting, colors, mood in detail.
-2. Ignore any text, watermarks, UI badges, or overlay elements visible on the image.
-3. Write a complete, detailed generation prompt that would faithfully recreate this image.
-4. Create 5 variations of this prompt where ONLY the model's pose or camera angle changes.
-   Everything else must stay IDENTICAL: subject appearance, hair, clothes, colors, lighting, style, mood, background, quality settings.
+STEP 1 — Extract the base prompt:
+Look for any generation prompt text written on the image (usually at the bottom, in a text block).
+- If you can read it clearly → use it EXACTLY as the base_prompt, word for word.
+- If the text is too small, blurry, or unreadable → describe the image visually and write a detailed generation prompt yourself that would recreate the same result.
+
+STEP 2 — Create 5 variants:
+Using the base_prompt, create 5 variations where ONLY the pose or camera angle changes.
+Everything else stays IDENTICAL: subject, appearance, hair, clothes, colors, lighting, style, mood, background, quality settings.
 
 Variant rules:
 - Variant 1: exact original pose (unchanged)
-- Variant 2: different body pose (e.g., sitting, walking, different hands position)
+- Variant 2: different body pose (e.g., sitting, walking, different hand position)
 - Variant 3: different camera angle (e.g., side profile, three-quarter view, from behind)
-- Variant 4: different framing/distance (e.g., close-up portrait vs full body shot)
+- Variant 4: different framing/distance (e.g., close-up portrait vs full body)
 - Variant 5: different pose detail (e.g., looking away, turned head, different arm position)
 
 For each variant:
-- "full": complete prompt up to 1000 characters (for image generation)
-- "short": 80-120 character summary (for text overlay on image)
+- "full": complete generation prompt up to 1000 characters
+- "short": 80-120 character summary for text overlay on the image
 
 Return JSON only:
 {
