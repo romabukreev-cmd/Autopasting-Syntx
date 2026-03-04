@@ -12,6 +12,7 @@ from config import (
     DELAY_BETWEEN_GENERATIONS,
     DRIVE_BASE_PATH,
     DRIVE_FOLDER_GENS,
+    GENERATIONS_PER_PROMPT,
     IMAGES_PER_WEEK,
     MAX_GENERATION_ATTEMPTS,
     MODEL_IMAGE_1,
@@ -175,41 +176,50 @@ async def _process_one(gen_id: int, item: dict, week: int) -> tuple[bool, bool]:
         )
         await db.commit()
 
-    success_sd = False
-    success_nb = False
-    sd_file_id = ""
-    sd_pin_id = ""
-    nb_pin_id = ""
+    sd_ok = 0
+    nb_ok = 0
+    last_sd_pin_id = ""
+    last_nb_pin_id = ""
+    last_sd_file_id = ""
 
-    # --- SeeDream image ---
-    sd_data = await _generate_with_retry(item["full"], MODEL_IMAGE_1)
-    if sd_data:
-        sd_file_id = await drive.upload_file(sd_data, f"{base_path}/seedream/gen_{gen_id:04d}.jpg")
-        sd_pin = overlay.apply_overlay(sd_data, item["short"])
-        sd_pin_id = await drive.upload_file(sd_pin, f"{base_path}/seedream_pin/gen_{gen_id:04d}.jpg")
-        success_sd = True
-        logger.info(f"gen_{gen_id:04d} SeeDream: ok")
-    else:
-        logger.warning(f"gen_{gen_id:04d} SeeDream: failed")
+    # --- SeeDream: GENERATIONS_PER_PROMPT images ---
+    for n in range(GENERATIONS_PER_PROMPT):
+        sd_data = await _generate_with_retry(item["full"], MODEL_IMAGE_1)
+        if sd_data:
+            fid = await drive.upload_file(sd_data, f"{base_path}/seedream/gen_{gen_id:04d}_{n+1}.jpg")
+            sd_pin = overlay.apply_overlay(sd_data, item["short"])
+            pid = await drive.upload_file(sd_pin, f"{base_path}/seedream_pin/gen_{gen_id:04d}_{n+1}.jpg")
+            last_sd_file_id = fid
+            last_sd_pin_id = pid
+            sd_ok += 1
+            logger.info(f"gen_{gen_id:04d} SeeDream {n+1}/{GENERATIONS_PER_PROMPT}: ok")
+        else:
+            logger.warning(f"gen_{gen_id:04d} SeeDream {n+1}/{GENERATIONS_PER_PROMPT}: failed")
+        await asyncio.sleep(DELAY_BETWEEN_GENERATIONS)
 
-    # --- NanaBana image ---
-    nb_data = await _generate_with_retry(item["full"], MODEL_IMAGE_2)
-    if nb_data:
-        await drive.upload_file(nb_data, f"{base_path}/nanobana/gen_{gen_id:04d}.jpg")
-        nb_pin = overlay.apply_overlay(nb_data, item["short"])
-        nb_pin_id = await drive.upload_file(nb_pin, f"{base_path}/nanobana_pin/gen_{gen_id:04d}.jpg")
-        success_nb = True
-        logger.info(f"gen_{gen_id:04d} NanaBana: ok")
-    else:
-        logger.warning(f"gen_{gen_id:04d} NanaBana: failed")
+    # --- NanaBana: GENERATIONS_PER_PROMPT images ---
+    for n in range(GENERATIONS_PER_PROMPT):
+        nb_data = await _generate_with_retry(item["full"], MODEL_IMAGE_2)
+        if nb_data:
+            await drive.upload_file(nb_data, f"{base_path}/nanobana/gen_{gen_id:04d}_{n+1}.jpg")
+            nb_pin = overlay.apply_overlay(nb_data, item["short"])
+            pid = await drive.upload_file(nb_pin, f"{base_path}/nanobana_pin/gen_{gen_id:04d}_{n+1}.jpg")
+            last_nb_pin_id = pid
+            nb_ok += 1
+            logger.info(f"gen_{gen_id:04d} NanaBana {n+1}/{GENERATIONS_PER_PROMPT}: ok")
+        else:
+            logger.warning(f"gen_{gen_id:04d} NanaBana {n+1}/{GENERATIONS_PER_PROMPT}: failed")
+        await asyncio.sleep(DELAY_BETWEEN_GENERATIONS)
 
-    # Update DB — store both pin IDs
+    success_sd = sd_ok > 0
+    success_nb = nb_ok > 0
+
     async with aiosqlite.connect(DB_PATH) as db:
         if success_sd or success_nb:
             await db.execute(
                 "UPDATE generations SET status = 'success', gdrive_file_id = ?, "
                 "pinterest_file_id = ?, nb_pinterest_file_id = ? WHERE id = ?",
-                (sd_file_id, sd_pin_id, nb_pin_id, gen_id),
+                (last_sd_file_id, last_sd_pin_id, last_nb_pin_id, gen_id),
             )
         else:
             await db.execute("UPDATE generations SET status = 'failed' WHERE id = ?", (gen_id,))

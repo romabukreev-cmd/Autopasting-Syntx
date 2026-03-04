@@ -34,6 +34,7 @@ DRIVE_FOLDER_GENS = "База генераций"
 
 # Generation
 IMAGES_PER_WEEK = 100
+GENERATIONS_PER_PROMPT = 5  # сколько изображений генерить на каждой модели с одного промпта
 IMAGES_PER_DAY_MIN = 15
 IMAGES_PER_DAY_MAX = 20
 

@@ -12,7 +12,6 @@ from config import (
     DELAY_GDRIVE_DOWNLOAD,
     DRIVE_BASE_PATH,
     DRIVE_FOLDER_REFS,
-    IMAGES_PER_WEEK,
     OPENROUTER_API_KEY,
     OPENROUTER_BASE_URL,
     MODEL_ANALYZER,
@@ -29,17 +28,12 @@ ANALYZE_PROMPT = """Your only task: read the generation prompt text printed on t
 The prompt is usually located at the bottom of the image in a text block.
 
 Rules:
-- Copy it COMPLETELY, word for word, every single sentence, do not shorten or paraphrase.
+- Copy it word for word, every single sentence. Do NOT shorten, summarize, or rephrase.
+- Also write a "short" summary (80-120 characters) of the prompt for use as image overlay text.
 - If there is no readable text → describe the image in detail and write a generation prompt yourself.
-- For "short": write a 80-120 character summary of the prompt (for text overlay on the image).
 
-Return JSON only:
-{
-  "base_prompt": "full prompt text copied from the image",
-  "variants": [
-    {"full": "full prompt text copied from the image (same as base_prompt)", "short": "80-120 char summary"}
-  ]
-}"""
+Return JSON only, no markdown fences:
+{"base_prompt": "<exact text from image>", "short": "<80-120 char summary>"}"""
 
 
 async def _analyze_image(image_data: bytes) -> dict:
@@ -125,15 +119,14 @@ async def run_analysis(bot, chat_id: int):
                 md5 = await drive.compute_md5(data)
 
                 result = await _analyze_image(data)
-                variants = result.get("variants", [])
                 base_prompt = result.get("base_prompt", "")
+                short = result.get("short", "")
 
                 # Log full prompt for debugging
                 logger.info(f"Analyzed '{ref['name']}': base_prompt={base_prompt}")
-                for i, v in enumerate(variants):
-                    logger.info(f"  Variant {i} full: {v.get('full', '')}")
-                    logger.info(f"  Variant {i} short: {v.get('short', '')}")
+                logger.info(f"  short: {short}")
 
+                variants = [{"full": base_prompt, "short": short}]
                 prompts_json = json.dumps(variants, ensure_ascii=False)
                 today = date.today().isoformat()
 
@@ -152,13 +145,10 @@ async def run_analysis(bot, chat_id: int):
             except Exception as e:
                 logger.error(f"Error processing {ref['name']}: {e}")
 
-        total_prompts = processed * 5
-        weeks = round(total_prompts / IMAGES_PER_WEEK, 1)
-
         await bot.send_message(
             chat_id,
-            f"Готово. Создано {total_prompts} промптов ({processed} × 5 вариантов позы/ракурса).\n"
-            f"Распределено по {weeks} неделям.\n\n"
+            f"Готово. Обработано {processed} референсов.\n"
+            f"Генераций: {processed} × 5 SeeDream + {processed} × 5 NanaBana = {processed * 10} изображений.\n\n"
             f"Запустить генерацию → Pinterest → Генерация неделя 1"
         )
         await set_state(analysis_status="done")
