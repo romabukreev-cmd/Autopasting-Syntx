@@ -1,3 +1,4 @@
+import html
 import logging
 import random
 from datetime import datetime, timezone
@@ -19,38 +20,101 @@ logger = logging.getLogger(__name__)
 
 client = AsyncOpenAI(api_key=OPENROUTER_API_KEY, base_url=OPENROUTER_BASE_URL)
 
-TG_POST_PROMPT = """You are writing a post for a Telegram channel about AI image generation (Syntx AI).
+TG_POST_PROMPT = """Ты — копирайтер Telegram-канала про нейросети и промпты. Твоя задача — написать короткую подводку к посту с промптом для генерации изображения.
 
-The post is based on this generation prompt:
-{prompt}
+Ты получаешь промпт генерации изображения. Проанализируй его, пойми что за визуал он создаёт, и напиши:
 
-Category: {category}
+1. ЗАГОЛОВОК — формат: "ПРОМПТ · [НАЗВАНИЕ СТИЛЯ/ЭФФЕКТА В ВЕРХНЕМ РЕГИСТРЕ]"
+   Название должно быть коротким (2-4 слова), цепляющим, отражать суть визуала. Не повторяй слова из промпта дословно — переосмысли.
 
-Write a Telegram post in Russian with this structure:
-1. A catchy headline (bold, use **headline**)
-2. The original generation prompt (in a code block using ```)
-3. 2-3 short lines: how to use this prompt (where to paste it, what to expect)
+2. ВСТУПЛЕНИЕ — 1-3 предложения. Это НЕ описание картинки. Это:
+   - или формат/приём и для кого он ("Формат для тех, кто хочет...")
+   - или короткий комментарий почему это работает
+   - или провокация/интрига ("Один промпт — и обычное фото превращается в...")
+   - или практическая подача ("Готовый промпт для...")
 
-Requirements:
-- Language: Russian
-- Tone: engaging, community-style, no corporate speak
-- Total length: 150-300 characters of text (excluding the code block)
-- Do NOT add hashtags
-- Do NOT add emojis unless they fit naturally
+Меняй стиль вступления от поста к посту. Не начинай каждый раз одинаково. Варьируй: где-то одно предложение, где-то два-три. Где-то сухо и по делу, где-то с лёгкой эмоцией.
 
-Return only the post text, nothing else."""
+ПРАВИЛА:
+- Пиши на русском
+- Без эмодзи (кроме случаев где 1 эмодзи действительно уместен)
+- Без восклицательных знаков
+- Без слов: "уникальный", "потрясающий", "невероятный", "магия", "волшебство"
+- Без прямых продаж и CTA (инструкция добавляется отдельно)
+- Тон: простой, живой, как в личном блоге. Не экспертный, не продающий — просто человек делится находкой. Можно начать с "Тот случай, когда...", "Короче,", "Вот это я понимаю —", "Простой промпт, а результат...". Без пафоса, без умных слов, без editorial-жаргона.
+- НЕ описывай изображение буквально — дай контекст, приём, идею
+
+ФОРМАТ ОТВЕТА (строго):
+
+ПРОМПТ · [НАЗВАНИЕ]
+
+[Вступление]
+
+Больше ничего не пиши. Никаких пояснений, никакого промпта, никакой инструкции — только заголовок и вступление."""
+
+CATEGORY_HASHTAGS = {
+    "ПРОМПТЫ / Мужские нейрофото": "#мужскоенейрофото",
+    "ПРОМПТЫ / Женские нейрофото": "#женскоенейрофото",
+    "ПРОМПТЫ / 3D буквы": "#3Dбуквы",
+    "ПРОМПТЫ / 3D логотипы": "#3Dлоготипы",
+    "ПРОМПТЫ / 3D Текст": "#3Dтекст",
+    "ПРОМПТЫ / Персонажи": "#персонажи",
+    "ПРОМПТЫ / Фото товаров": "#нейрофототовара",
+    "ПРОМПТЫ / Эстетика": "#нейроэстетика",
+}
+
+INSTRUCTION_CATEGORIES = {
+    "ПРОМПТЫ / Мужские нейрофото": "своё фото",
+    "ПРОМПТЫ / Женские нейрофото": "своё фото",
+    "ПРОМПТЫ / Фото товаров": "фото товара",
+}
 
 
-async def _generate_post_text(prompt: str, category: str) -> str:
+def _build_instruction(photo_text: str) -> str:
+    return (
+        "<b>Как сделать:</b>\n\n"
+        '1\u20e3 Открой <a href="https://t.me/syntxaibot?start=aff_359133225"><b>бот Syntx</b></a>\n\n'
+        "2\u20e3 Жми в «Дизайн с ИИ» → Nano Banana 2 / Seedream 4.5\n\n"
+        f"3\u20e3 Прикрепи {photo_text}\n\n"
+        "4\u20e3 Выбери формат и качество изображения\n\n"
+        "5\u20e3 Вставь готовый промпт и отправь"
+    )
+
+
+async def _generate_header_intro(prompt: str, category: str) -> str:
     resp = await client.chat.completions.create(
         model=MODEL_TG_POST,
         messages=[{
             "role": "user",
-            "content": TG_POST_PROMPT.format(prompt=prompt, category=category),
+            "content": f"{TG_POST_PROMPT}\n\nПромпт:\n{prompt}\n\nКатегория: {category}",
         }],
-        max_tokens=600,
+        max_tokens=400,
     )
     return resp.choices[0].message.content.strip()
+
+
+def _build_post(header_intro: str, prompt_text: str, category: str) -> str:
+    # Parse Claude response: first line = header, rest = intro
+    parts_raw = header_intro.split("\n\n", 1)
+    header = parts_raw[0].strip()
+    intro = parts_raw[1].strip() if len(parts_raw) > 1 else ""
+
+    parts = [
+        f"<b>{html.escape(header)}</b>",
+        html.escape(intro) if intro else None,
+        "<b>Копируй промпт \U0001f447</b>",
+        f"<code>{html.escape(prompt_text)}</code>",
+    ]
+    parts = [p for p in parts if p]
+
+    if category in INSTRUCTION_CATEGORIES:
+        parts.append(_build_instruction(INSTRUCTION_CATEGORIES[category]))
+
+    hashtag = CATEGORY_HASHTAGS.get(category, "")
+    if hashtag:
+        parts.append(hashtag)
+
+    return "\n\n".join(parts)
 
 
 async def _pick_images(ref_id: int) -> tuple[int, list[bytes]]:
@@ -80,7 +144,7 @@ async def _pick_images(ref_id: int) -> tuple[int, list[bytes]]:
     images = []
     for f in chosen:
         try:
-            data = await drive.download_file(f["filename"])  # filename stores full remote path
+            data = await drive.download_file(f["filename"])
             images.append(data)
         except Exception as e:
             logger.warning(f"Failed to download {f['filename']}: {e}")
@@ -92,23 +156,22 @@ async def post_tg(bot, tg_post_id: int, ref_id: int, prompt: str, category: str)
     """Generate post text, pick images, post to TG channel, update DB."""
     logger.info(f"Posting TG post tg_post_id={tg_post_id} ref_id={ref_id}")
 
-    text = await _generate_post_text(prompt, category)
+    header_intro = await _generate_header_intro(prompt, category)
+    text = _build_post(header_intro, prompt, category)
     scenario, images = await _pick_images(ref_id)
 
     try:
         if not images:
-            # Text-only fallback
-            await bot.send_message(TG_CHANNEL_ID, text, parse_mode="Markdown")
+            await bot.send_message(TG_CHANNEL_ID, text, parse_mode="HTML")
         elif len(images) == 1:
             photo = BufferedInputFile(images[0], filename="image.jpg")
-            await bot.send_photo(TG_CHANNEL_ID, photo=photo, caption=text, parse_mode="Markdown")
+            await bot.send_photo(TG_CHANNEL_ID, photo=photo, caption=text, parse_mode="HTML")
         else:
-            # Media group — first image gets the caption
             media = []
             for i, img_bytes in enumerate(images):
                 photo = BufferedInputFile(img_bytes, filename=f"image_{i}.jpg")
                 if i == 0:
-                    media.append(InputMediaPhoto(media=photo, caption=text, parse_mode="Markdown"))
+                    media.append(InputMediaPhoto(media=photo, caption=text, parse_mode="HTML"))
                 else:
                     media.append(InputMediaPhoto(media=photo))
             await bot.send_media_group(TG_CHANNEL_ID, media=media)
