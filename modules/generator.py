@@ -186,7 +186,7 @@ async def _process_one(gen_id: int, item: dict, week: int) -> tuple[bool, bool]:
             clean_path = f"{base_path}/seedream/{fname}"
             pin_path = f"{base_path}/seedream_pin/{fname}"
             await _save_file(sd_data, clean_path, "seedream", "clean", clean_path)
-            sd_pin = overlay.apply_overlay(sd_data, item["short"])
+            sd_pin = overlay.apply_overlay(sd_data, item["full"], "seedream")
             await _save_file(sd_pin, pin_path, "seedream", "pin", pin_path)
             sd_ok += 1
             logger.info(f"gen_{gen_id:04d} SeeDream {n+1}/{GENERATIONS_PER_PROMPT}: ok")
@@ -202,7 +202,7 @@ async def _process_one(gen_id: int, item: dict, week: int) -> tuple[bool, bool]:
             clean_path = f"{base_path}/nanobana/{fname}"
             pin_path = f"{base_path}/nanobana_pin/{fname}"
             await _save_file(nb_data, clean_path, "nanobana", "clean", clean_path)
-            nb_pin = overlay.apply_overlay(nb_data, item["short"])
+            nb_pin = overlay.apply_overlay(nb_data, item["full"], "nanobana")
             await _save_file(nb_pin, pin_path, "nanobana", "pin", pin_path)
             nb_ok += 1
             logger.info(f"gen_{gen_id:04d} NanaBana {n+1}/{GENERATIONS_PER_PROMPT}: ok")

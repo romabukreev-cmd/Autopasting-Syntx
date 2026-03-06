@@ -29,11 +29,10 @@ The prompt is usually located at the bottom of the image in a text block.
 
 Rules:
 - Copy it word for word, every single sentence. Do NOT shorten, summarize, or rephrase.
-- Also write a "short" summary (80-120 characters) of the prompt for use as image overlay text.
 - If there is no readable text → describe the image in detail and write a generation prompt yourself.
 
 Return JSON only, no markdown fences:
-{"base_prompt": "<exact text from image>", "short": "<80-120 char summary>"}"""
+{"base_prompt": "<exact text from image>"}"""
 
 
 async def _analyze_image(image_data: bytes) -> dict:
@@ -120,13 +119,10 @@ async def run_analysis(bot, chat_id: int):
 
                 result = await _analyze_image(data)
                 base_prompt = result.get("base_prompt", "")
-                short = result.get("short", "")
 
-                # Log full prompt for debugging
-                logger.info(f"Analyzed '{ref['name']}': base_prompt={base_prompt}")
-                logger.info(f"  short: {short}")
+                logger.info(f"Analyzed '{ref['name']}': {base_prompt[:100]}...")
 
-                variants = [{"full": base_prompt, "short": short}]
+                variants = [{"full": base_prompt}]
                 prompts_json = json.dumps(variants, ensure_ascii=False)
                 today = date.today().isoformat()
 

@@ -24,8 +24,7 @@ def _csv_url() -> str:
 def _parse_csv(text: str) -> dict:
     """
     Expected columns (row 1 = header, skipped):
-    category | board_id | title_1 | title_2 | title_3 | title_4 | title_5
-             | desc_1   | desc_2  | desc_3  | desc_4  | desc_5  | link
+    category | board_id | title_1 | title_2 | title_3 | desc_1 | desc_2 | desc_3 | link
     """
     data = {}
     reader = csv.reader(io.StringIO(text))
@@ -35,9 +34,9 @@ def _parse_csv(text: str) -> dict:
             continue
         category = row[0].strip()
         board_id = row[1].strip() if len(row) > 1 else ""
-        titles = [row[i].strip() for i in range(2, 7) if i < len(row) and row[i].strip()]
-        descriptions = [row[i].strip() for i in range(7, 12) if i < len(row) and row[i].strip()]
-        link = row[12].strip() if len(row) > 12 else ""
+        titles = [row[i].strip() for i in range(2, 5) if i < len(row) and row[i].strip()]
+        descriptions = [row[i].strip() for i in range(5, 8) if i < len(row) and row[i].strip()]
+        link = row[8].strip() if len(row) > 8 else ""
         data[category] = {
             "board_id": board_id,
             "titles": titles,

@@ -22,8 +22,9 @@ async def publish_pin(pin_id: int, file_id: str, category: str, board_id: str) -
     description = random.choice(cat_data["descriptions"]) if cat_data["descriptions"] else ""
     link = cat_data.get("link") or MAKE_PIN_LINK or ""
 
+    download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
     payload = {
-        "file_id": file_id,
+        "file_url": download_url,
         "title": title,
         "description": description,
         "link": link,
