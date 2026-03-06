@@ -13,6 +13,8 @@ from config import (
     DRIVE_BASE_PATH,
     DRIVE_FOLDER_GENS,
     GENERATIONS_PER_PROMPT,
+    IMAGES_PER_DAY_MIN,
+    IMAGES_PER_DAY_MAX,
     IMAGES_PER_WEEK,
     MAX_GENERATION_ATTEMPTS,
     MODEL_IMAGE_1,
@@ -256,11 +258,15 @@ async def run_generation(bot, chat_id: int, week: int):
         await set_state(generation_status=status)
 
         total_images = (sd_ok + nb_ok) * GENERATIONS_PER_PROMPT
+        avg_per_day = (IMAGES_PER_DAY_MIN + IMAGES_PER_DAY_MAX) / 2
+        days = total_images / avg_per_day if avg_per_day else 0
+        weeks = days / 7
         text = (
             f"Генерация завершена.\n"
             f"SeeDream: {sd_ok * GENERATIONS_PER_PROMPT}/{total * GENERATIONS_PER_PROMPT} ✓\n"
             f"NanaBana: {nb_ok * GENERATIONS_PER_PROMPT}/{total * GENERATIONS_PER_PROMPT} ✓\n"
             f"Итого изображений: {total_images}\n"
+            f"Хватит на: ~{days:.1f} дн. / {weeks:.1f} нед. ({IMAGES_PER_DAY_MIN}-{IMAGES_PER_DAY_MAX} пинов/день)\n"
             f"Упало полностью: {failed} рефов."
         )
         if failed > 0:
