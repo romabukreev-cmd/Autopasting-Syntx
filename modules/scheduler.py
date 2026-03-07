@@ -182,6 +182,62 @@ async def setup_posting_schedule(bot, chat_id: int):
         await set_state(posting_status="idle")
 
 
+async def setup_test_schedule(bot, chat_id: int):
+    """Schedule all unscheduled pins immediately (for testing all categories)."""
+    try:
+        await sheets.load_sheets()
+        sheets_data = sheets.get_cached()
+
+        async with aiosqlite.connect(DB_PATH) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                """SELECT gf.id, gf.ref_id, gf.gdrive_file_id, gf.model, r.category
+                   FROM generation_files gf
+                   JOIN refs r ON gf.ref_id = r.id
+                   WHERE gf.type = 'pin'
+                     AND gf.id NOT IN (
+                         SELECT generation_file_id FROM pins_schedule
+                         WHERE generation_file_id IS NOT NULL
+                     )
+                   ORDER BY gf.ref_id, gf.model, gf.id"""
+            ) as cur:
+                rows = await cur.fetchall()
+
+        if not rows:
+            await bot.send_message(chat_id, "Нет готовых изображений для постинга.")
+            return
+
+        now = datetime.now(tz)
+        async with aiosqlite.connect(DB_PATH) as db:
+            for i, item in enumerate(rows):
+                dt = now + timedelta(seconds=i * 5)
+                cat_data = sheets_data.get(item["category"]) or sheets_data.get(f"ПРОМПТЫ / {item['category']}") or {}
+                board_id = cat_data.get("board_id", "")
+                await db.execute(
+                    """INSERT INTO pins_schedule
+                       (generation_file_id, ref_id, gdrive_file_id, category, board_id, scheduled_at, status)
+                       VALUES (?, ?, ?, ?, ?, ?, 'pending')""",
+                    (item["id"], item["ref_id"], item["gdrive_file_id"],
+                     item["category"], board_id, dt.isoformat()),
+                )
+            await db.commit()
+
+        await set_state(
+            posting_status="running",
+            posting_start_date=now.date().isoformat(),
+            posting_end_date=now.date().isoformat(),
+        )
+        await bot.send_message(
+            chat_id,
+            f"Тест: {len(rows)} пинов запланировано немедленно. Публикация начнётся в течение минуты."
+        )
+
+    except Exception as e:
+        logger.error(f"Test schedule failed: {e}")
+        await bot.send_message(chat_id, f"Ошибка: {e}")
+        await set_state(posting_status="idle")
+
+
 async def publish_due_pins(bot, admin_chat_id: int):
     """Called by APScheduler every minute. Publishes pins whose scheduled_at has passed."""
     now = datetime.now(tz).isoformat()

@@ -35,7 +35,10 @@ def kb_pinterest(week: int = 1):
             InlineKeyboardButton(text="▶", callback_data=f"pin:week:{week + 1}"),
         ],
         [InlineKeyboardButton(text=f"▶ Генерация недели {week}", callback_data=f"pin:generate:{week}")],
-        [InlineKeyboardButton(text="Запустить постинг", callback_data="pin:start")],
+        [
+            InlineKeyboardButton(text="Запустить постинг", callback_data="pin:start"),
+            InlineKeyboardButton(text="🧪 Тест (сразу)", callback_data="pin:test"),
+        ],
         [InlineKeyboardButton(text="Повторить упавшие", callback_data="pin:retry")],
         [InlineKeyboardButton(text="Статус", callback_data="pin:status")],
         [
@@ -201,6 +204,19 @@ async def cb_start_posting(call: CallbackQuery):
     await call.message.answer("Добавляю новые пины в расписание постинга...")
     from modules.scheduler import setup_posting_schedule
     asyncio.create_task(setup_posting_schedule(call.bot, call.message.chat.id))
+
+
+@router.callback_query(F.data == "pin:test")
+@admin_only
+async def cb_test_posting(call: CallbackQuery):
+    state = await get_state()
+    if state.get("generation_status") not in ("done", "partial"):
+        await call.answer("Сначала завершите генерацию.", show_alert=True)
+        return
+    await call.answer("Запускаю тест...")
+    await call.message.answer("Публикую все пины немедленно (тестовый режим)...")
+    from modules.scheduler import setup_test_schedule
+    asyncio.create_task(setup_test_schedule(call.bot, call.message.chat.id))
 
 
 @router.callback_query(F.data == "pin:retry")
