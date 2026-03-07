@@ -70,6 +70,15 @@ def _load_font(filename: str, size: int) -> ImageFont.FreeTypeFont:
             return ImageFont.load_default()
 
 
+def _region_brightness(img: Image.Image, y_start: int, y_end: int) -> str:
+    """Returns 'light' if the region avg brightness > 160, else 'dark'."""
+    w = img.width
+    crop = img.crop((0, y_start, w, y_end)).convert("L")
+    pixels = list(crop.getdata())
+    avg = sum(pixels) / len(pixels) if pixels else 0
+    return "light" if avg > 160 else "dark"
+
+
 def _make_gradient(width: int, height: int, gradient_height: int) -> Image.Image:
     """Full-size RGBA image: black gradient at bottom, transparent above."""
     overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
@@ -164,9 +173,12 @@ def apply_overlay(image_data: bytes, prompt: str, model_type: str) -> bytes:
     font_size_tg = round(cfg.font_size_tg * scale)
     prompt_gap = round(cfg.prompt_gap * scale)
 
-    # --- Gradient ---
-    gradient = _make_gradient(w, h, gradient_height)
-    img = Image.alpha_composite(img, gradient)
+    # --- Auto text color: analyze top and bottom zones ---
+    top_theme = _region_brightness(img, 0, min(margin * 3, h))
+    bot_theme = _region_brightness(img, max(0, h - gradient_height), h)
+    top_color = (30, 30, 30, 255) if top_theme == "light" else (255, 255, 255, 255)
+    bot_color = (30, 30, 30, 255) if bot_theme == "light" else (255, 255, 255, 255)
+    bot_color_dim = (bot_color[0], bot_color[1], bot_color[2], int(255 * 0.7))
 
     draw = ImageDraw.Draw(img)
 
@@ -185,7 +197,7 @@ def apply_overlay(image_data: bytes, prompt: str, model_type: str) -> bytes:
         (margin, title_y),
         cfg.model_label,
         font=font_title,
-        fill=(255, 255, 255, 255),
+        fill=top_color,
         align="left",
         spacing=0,
     )
@@ -194,7 +206,7 @@ def apply_overlay(image_data: bytes, prompt: str, model_type: str) -> bytes:
     tg_bbox = draw.textbbox((0, 0), cfg.tg_handle, font=font_tg)
     tg_w = tg_bbox[2] - tg_bbox[0]
     tg_y = margin - tg_bbox[1]
-    draw.text((w - margin - tg_w, tg_y), cfg.tg_handle, font=font_tg, fill=(255, 255, 255, 255))
+    draw.text((w - margin - tg_w, tg_y), cfg.tg_handle, font=font_tg, fill=top_color)
 
     # --- Bottom block: prompt text + /промпт label ---
     # Layout (bottom → top):
@@ -222,7 +234,7 @@ def apply_overlay(image_data: bytes, prompt: str, model_type: str) -> bytes:
         (label_x, label_y),
         "/промпт",
         font=font_title,
-        fill=(255, 255, 255, 255),
+        fill=bot_color,
     )
 
     # Draw prompt body (justified, 70% opacity)
@@ -234,7 +246,7 @@ def apply_overlay(image_data: bytes, prompt: str, model_type: str) -> bytes:
         y=prompt_top,
         max_width=text_area_w,
         line_h=prompt_line_h,
-        fill=(255, 255, 255, int(255 * 0.7)),
+        fill=bot_color_dim,
     )
 
     result = img.convert("RGB")
