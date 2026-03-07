@@ -64,4 +64,5 @@ def get_cached() -> dict:
 
 
 def get_category_data(category: str) -> dict | None:
-    return _cache.get(category) or _cache.get(f"ПРОМПТЫ / {category}")
+    normalized = category.replace("／", "/")
+    return _cache.get(normalized) or _cache.get(f"ПРОМПТЫ / {normalized}")
