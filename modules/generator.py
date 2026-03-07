@@ -39,7 +39,7 @@ async def _generate_image(prompt: str, model: str) -> bytes:
     """Call OpenRouter chat/completions with modalities=image to get image bytes."""
     modalities = ["image"] if _is_image_only_model(model) else ["image", "text"]
 
-    async with httpx.AsyncClient(timeout=120) as http:
+    async with httpx.AsyncClient(timeout=300) as http:
         resp = await http.post(
             f"{OPENROUTER_BASE_URL}/chat/completions",
             headers={
