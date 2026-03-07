@@ -99,18 +99,22 @@ def _build_post(header_intro: str, prompt_text: str, category: str) -> str:
     header = parts_raw[0].strip()
     intro = parts_raw[1].strip() if len(parts_raw) > 1 else ""
 
+    # Normalize category for dict lookups (refs table stores short names)
+    full_cat = category if category.startswith("ПРОМПТЫ") else f"ПРОМПТЫ / {category}"
+
     parts = [
-        f"<b>{html.escape(header)}</b>",
+        f"<b>⬆️ {html.escape(header)}</b>",
         html.escape(intro) if intro else None,
         "<b>Копируй промпт \U0001f447</b>",
-        f"<code>{html.escape(prompt_text)}</code>",
+        f"<pre>{html.escape(prompt_text)}</pre>",
     ]
     parts = [p for p in parts if p]
 
-    if category in INSTRUCTION_CATEGORIES:
-        parts.append(_build_instruction(INSTRUCTION_CATEGORIES[category]))
+    instruction_key = category if category in INSTRUCTION_CATEGORIES else full_cat
+    if instruction_key in INSTRUCTION_CATEGORIES:
+        parts.append(_build_instruction(INSTRUCTION_CATEGORIES[instruction_key]))
 
-    hashtag = CATEGORY_HASHTAGS.get(category, "")
+    hashtag = CATEGORY_HASHTAGS.get(category) or CATEGORY_HASHTAGS.get(full_cat, "")
     if hashtag:
         parts.append(hashtag)
 
@@ -165,16 +169,15 @@ async def post_tg(bot, tg_post_id: int, ref_id: int, prompt: str, category: str)
             await bot.send_message(TG_CHANNEL_ID, text, parse_mode="HTML")
         elif len(images) == 1:
             photo = BufferedInputFile(images[0], filename="image.jpg")
-            await bot.send_photo(TG_CHANNEL_ID, photo=photo, caption=text, parse_mode="HTML")
+            await bot.send_photo(TG_CHANNEL_ID, photo=photo)
+            await bot.send_message(TG_CHANNEL_ID, text, parse_mode="HTML")
         else:
             media = []
             for i, img_bytes in enumerate(images):
                 photo = BufferedInputFile(img_bytes, filename=f"image_{i}.jpg")
-                if i == 0:
-                    media.append(InputMediaPhoto(media=photo, caption=text, parse_mode="HTML"))
-                else:
-                    media.append(InputMediaPhoto(media=photo))
+                media.append(InputMediaPhoto(media=photo))
             await bot.send_media_group(TG_CHANNEL_ID, media=media)
+            await bot.send_message(TG_CHANNEL_ID, text, parse_mode="HTML")
 
         now = datetime.now(timezone.utc).isoformat()
         async with aiosqlite.connect(DB_PATH) as db:

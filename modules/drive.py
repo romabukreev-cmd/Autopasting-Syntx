@@ -134,5 +134,13 @@ async def get_file_id(remote_path: str) -> str:
     return ""
 
 
+async def make_public(remote_path: str) -> None:
+    """Make file publicly accessible (Anyone with the link can view) via rclone link."""
+    try:
+        await _rclone("link", _remote(remote_path))
+    except RuntimeError as e:
+        logger.warning(f"make_public failed for {remote_path}: {e}")
+
+
 async def compute_md5(data: bytes) -> str:
     return hashlib.md5(data).hexdigest()

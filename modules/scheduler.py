@@ -115,9 +115,9 @@ async def setup_posting_schedule(bot, chat_id: int):
 
         if last_scheduled:
             last_date = date.fromisoformat(last_scheduled[:10])
-            start_date = max(last_date, date.today()) + timedelta(days=1)
+            start_date = max(last_date, date.today() - timedelta(days=1)) + timedelta(days=1)
         else:
-            start_date = date.today() + timedelta(days=1)
+            start_date = date.today()
 
         posting_hours = list(range(9, 22))
         schedule_entries = []

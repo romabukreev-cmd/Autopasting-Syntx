@@ -171,6 +171,8 @@ async def _process_one(gen_id: int, item: dict, week: int) -> tuple[bool, bool]:
     async def _save_file(data: bytes, path: str, model: str, ftype: str, fname: str):
         """Upload file and record in generation_files."""
         file_id = await drive.upload_file(data, path)
+        if ftype == "pin":
+            await drive.make_public(path)
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute(
                 "INSERT INTO generation_files (generation_id, ref_id, model, type, gdrive_file_id, filename) "

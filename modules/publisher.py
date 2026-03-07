@@ -13,6 +13,13 @@ logger = logging.getLogger(__name__)
 
 async def publish_pin(pin_id: int, file_id: str, category: str, board_id: str) -> bool:
     """Send one pin to Make.com webhook. Returns True on success."""
+    if not sheets.get_cached():
+        try:
+            await sheets.load_sheets()
+        except Exception as e:
+            logger.error(f"Failed to load Sheets: {e}")
+            return False
+
     cat_data = sheets.get_category_data(category)
     if not cat_data:
         logger.error(f"No Sheets data for category: {category}")
@@ -22,7 +29,7 @@ async def publish_pin(pin_id: int, file_id: str, category: str, board_id: str) -
     description = random.choice(cat_data["descriptions"]) if cat_data["descriptions"] else ""
     link = cat_data.get("link") or MAKE_PIN_LINK or ""
 
-    download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
+    download_url = f"https://lh3.googleusercontent.com/d/{file_id}"
     payload = {
         "file_url": download_url,
         "title": title,
