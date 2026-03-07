@@ -110,6 +110,7 @@ async def run_analysis(bot, chat_id: int):
 
         if not to_process:
             await set_state(analysis_status="done")
+            await bot.send_message(chat_id, "Все референсы уже обработаны. Можно запускать генерацию.")
             return
 
         processed = 0
