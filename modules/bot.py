@@ -15,6 +15,24 @@ from database import get_state, set_state
 router = Router()
 logger = logging.getLogger(__name__)
 
+_menu_msg_id: int | None = None
+
+
+async def _show_menu(bot, chat_id: int, text: str, markup) -> None:
+    """Edit the persistent menu message in place, or send a new one."""
+    global _menu_msg_id
+    if _menu_msg_id:
+        try:
+            await bot.edit_message_text(
+                chat_id=chat_id, message_id=_menu_msg_id,
+                text=text, reply_markup=markup,
+            )
+            return
+        except Exception:
+            pass
+    sent = await bot.send_message(chat_id, text, reply_markup=markup)
+    _menu_msg_id = sent.message_id
+
 
 # --- Keyboards ---
 
@@ -88,7 +106,7 @@ def admin_only(func):
 @admin_only
 async def cmd_start(message: Message):
     await message.answer("Контент-завод Syntx", reply_markup=kb_reply_main())
-    await message.answer("Выбери площадку:", reply_markup=kb_main())
+    await _show_menu(message.bot, message.chat.id, "Выбери площадку:", kb_main())
 
 
 # --- Main menu navigation ---
@@ -394,16 +412,16 @@ async def cb_clear(call: CallbackQuery):
 async def reply_pinterest(message: Message):
     state = await get_state()
     week = state.get("active_week") or 1
-    await message.answer("Pinterest", reply_markup=kb_pinterest(week))
+    await _show_menu(message.bot, message.chat.id, "Pinterest", kb_pinterest(week))
 
 
 @router.message(F.text == "Telegram")
 @admin_only
 async def reply_telegram(message: Message):
-    await message.answer("Telegram", reply_markup=kb_telegram())
+    await _show_menu(message.bot, message.chat.id, "Telegram", kb_telegram())
 
 
 @router.message(F.text == "ВКонтакте")
 @admin_only
 async def reply_vk(message: Message):
-    await message.answer("ВКонтакте — скоро", reply_markup=kb_soon())
+    await _show_menu(message.bot, message.chat.id, "ВКонтакте — скоро", kb_soon())
