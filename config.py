@@ -57,4 +57,4 @@ TIMEZONE = "Europe/Moscow"
 TG_CHANNEL_ID = os.getenv("TG_CHANNEL_ID", "@roman_s_neuro")
 MODEL_TG_POST = "anthropic/claude-sonnet-4-6"
 TG_POST_HOUR_START = 10   # earliest hour for TG post (MSK)
-TG_POST_HOUR_END = 22     # latest hour for TG post (MSK)
+TG_POST_HOUR_END = 1      # latest hour for TG post (MSK, wraps midnight)

@@ -4,7 +4,7 @@ import random
 from datetime import datetime, timezone
 
 import aiosqlite
-from aiogram.types import BufferedInputFile, InputMediaPhoto
+from aiogram.types import BufferedInputFile, InputMediaPhoto, LinkPreviewOptions
 from openai import AsyncOpenAI
 
 from config import (
@@ -116,7 +116,7 @@ def _build_post(header_intro: str, prompt_text: str, category: str) -> str:
 
     hashtag = CATEGORY_HASHTAGS.get(category) or CATEGORY_HASHTAGS.get(full_cat, "")
     if hashtag:
-        parts.append(hashtag)
+        parts.append(f"Категория: {hashtag}")
 
     return "\n\n".join(parts)
 
@@ -166,18 +166,18 @@ async def post_tg(bot, tg_post_id: int, ref_id: int, prompt: str, category: str)
 
     try:
         if not images:
-            await bot.send_message(TG_CHANNEL_ID, text, parse_mode="HTML")
+            await bot.send_message(TG_CHANNEL_ID, text, parse_mode="HTML", link_preview_options=LinkPreviewOptions(is_disabled=True))
         elif len(images) == 1:
             photo = BufferedInputFile(images[0], filename="image.jpg")
             await bot.send_photo(TG_CHANNEL_ID, photo=photo)
-            await bot.send_message(TG_CHANNEL_ID, text, parse_mode="HTML")
+            await bot.send_message(TG_CHANNEL_ID, text, parse_mode="HTML", link_preview_options=LinkPreviewOptions(is_disabled=True))
         else:
             media = []
             for i, img_bytes in enumerate(images):
                 photo = BufferedInputFile(img_bytes, filename=f"image_{i}.jpg")
                 media.append(InputMediaPhoto(media=photo))
             await bot.send_media_group(TG_CHANNEL_ID, media=media)
-            await bot.send_message(TG_CHANNEL_ID, text, parse_mode="HTML")
+            await bot.send_message(TG_CHANNEL_ID, text, parse_mode="HTML", link_preview_options=LinkPreviewOptions(is_disabled=True))
 
         now = datetime.now(timezone.utc).isoformat()
         async with aiosqlite.connect(DB_PATH) as db:

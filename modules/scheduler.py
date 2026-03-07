@@ -54,25 +54,26 @@ def _distribute_pins(total: int, days: int, min_per_day: int, max_per_day: int) 
     return result
 
 
+def _in_tg_window(hour: int) -> bool:
+    """True if hour is within [TG_POST_HOUR_START, TG_POST_HOUR_END) wrapping midnight."""
+    if TG_POST_HOUR_START <= TG_POST_HOUR_END:
+        return TG_POST_HOUR_START <= hour < TG_POST_HOUR_END
+    else:  # wraps midnight (e.g. 10–01)
+        return hour >= TG_POST_HOUR_START or hour < TG_POST_HOUR_END
+
+
 def _next_tg_slot(now: datetime) -> datetime:
-    """Return next available TG posting time within 10:00-22:00 MSK window."""
+    """Return next available TG posting time within window (wraps midnight)."""
     now_local = now.astimezone(tz)
-    hour = now_local.hour
-    if TG_POST_HOUR_START <= hour < TG_POST_HOUR_END:
-        # Within window — post in 1-5 minutes
+    if _in_tg_window(now_local.hour):
         return now_local + timedelta(minutes=random.randint(1, 5))
-    elif hour >= TG_POST_HOUR_END:
-        # After window — next day at TG_POST_HOUR_START
-        next_day = (now_local + timedelta(days=1)).replace(
-            hour=TG_POST_HOUR_START, minute=random.randint(0, 30), second=0, microsecond=0
-        )
-        return next_day
-    else:
-        # Before window (night) — today at TG_POST_HOUR_START
-        today_start = now_local.replace(
-            hour=TG_POST_HOUR_START, minute=random.randint(0, 30), second=0, microsecond=0
-        )
+    # Outside window — next window start today or tomorrow
+    today_start = now_local.replace(
+        hour=TG_POST_HOUR_START, minute=random.randint(0, 30), second=0, microsecond=0
+    )
+    if today_start > now_local:
         return today_start
+    return today_start + timedelta(days=1)
 
 
 async def setup_posting_schedule(bot, chat_id: int):
@@ -119,7 +120,7 @@ async def setup_posting_schedule(bot, chat_id: int):
         else:
             start_date = date.today()
 
-        posting_hours = list(range(9, 22))
+        posting_hours = list(range(9, 24)) + [0]  # 09:00–00:59 MSK
         schedule_entries = []
         idx = 0
 
