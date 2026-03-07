@@ -278,21 +278,25 @@ async def _check_ref_tg_trigger(ref_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
 
-        # Count total and published pins for this ref
+        # Count total, published and failed pins for this ref
         async with db.execute(
             "SELECT COUNT(*) as total FROM pins_schedule WHERE ref_id = ?", (ref_id,)
         ) as cur:
             total_row = await cur.fetchone()
         async with db.execute(
-            "SELECT COUNT(*) as done FROM pins_schedule WHERE ref_id = ? AND status = 'published'",
+            "SELECT "
+            "SUM(CASE WHEN status='published' THEN 1 ELSE 0 END) as done, "
+            "SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) as failed "
+            "FROM pins_schedule WHERE ref_id = ?",
             (ref_id,),
         ) as cur:
             done_row = await cur.fetchone()
 
         total = total_row["total"] if total_row else 0
-        done = done_row["done"] if done_row else 0
+        done = done_row["done"] or 0 if done_row else 0
+        failed = done_row["failed"] or 0 if done_row else 0
 
-        if total == 0 or done < total:
+        if total == 0 or done + failed < total:
             return
 
         # Check if TG post already created for this ref
