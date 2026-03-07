@@ -25,7 +25,8 @@ async def _rclone(*args: str) -> str:
     )
     stdout, stderr = await proc.communicate()
     if proc.returncode != 0:
-        raise RuntimeError(f"rclone {' '.join(args)} failed: {stderr.decode()}")
+        detail = (stderr.decode().strip() or stdout.decode().strip() or "(no output)")
+        raise RuntimeError(f"rclone {' '.join(args)} failed: {detail}")
     return stdout.decode()
 
 
