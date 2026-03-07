@@ -99,7 +99,8 @@ def _build_post(header_intro: str, prompt_text: str, category: str) -> str:
     header = parts_raw[0].strip()
     intro = parts_raw[1].strip() if len(parts_raw) > 1 else ""
 
-    # Normalize category for dict lookups (refs table stores short names)
+    # Normalize category for dict lookups (refs table stores fullwidth slash ／ from Drive)
+    category = category.replace("／", "/")
     full_cat = category if category.startswith("ПРОМПТЫ") else f"ПРОМПТЫ / {category}"
 
     parts = [
