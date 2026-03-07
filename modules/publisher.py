@@ -26,8 +26,10 @@ async def publish_pin(pin_id: int, file_id: str, category: str, board_id: str) -
         return False
 
     title = random.choice(cat_data["titles"]) if cat_data["titles"] else ""
-    description = random.choice(cat_data["descriptions"]) if cat_data["descriptions"] else ""
+    description = (random.choice(cat_data["descriptions"]) if cat_data["descriptions"] else "")[:800]
     link = cat_data.get("link") or MAKE_PIN_LINK or ""
+    # Prefer board_id from Sheets (always fresh), fall back to stored value
+    effective_board_id = cat_data.get("board_id") or board_id
 
     download_url = f"https://lh3.googleusercontent.com/d/{file_id}"
     payload = {
@@ -35,7 +37,7 @@ async def publish_pin(pin_id: int, file_id: str, category: str, board_id: str) -
         "title": title,
         "description": description,
         "link": link,
-        "board_id": board_id,
+        "board_id": effective_board_id,
     }
 
     try:
