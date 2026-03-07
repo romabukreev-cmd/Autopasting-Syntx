@@ -15,6 +15,7 @@ from config import (
     OPENROUTER_API_KEY,
     OPENROUTER_BASE_URL,
     MODEL_ANALYZER,
+    GENERATIONS_PER_PROMPT,
 )
 from database import set_state
 from modules import drive
@@ -144,7 +145,7 @@ async def run_analysis(bot, chat_id: int):
         await bot.send_message(
             chat_id,
             f"Готово. Обработано {processed} референсов.\n"
-            f"Генераций: {processed} × 5 SeeDream + {processed} × 5 NanaBana = {processed * 10} изображений.\n\n"
+            f"Генераций: {processed} × {GENERATIONS_PER_PROMPT} SeeDream + {processed} × {GENERATIONS_PER_PROMPT} NanaBana = {processed * GENERATIONS_PER_PROMPT * 2} изображений.\n\n"
             f"Запустить генерацию → Pinterest → Генерация неделя 1"
         )
         await set_state(analysis_status="done")
