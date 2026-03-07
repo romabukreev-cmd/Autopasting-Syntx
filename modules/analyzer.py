@@ -21,7 +21,7 @@ from modules import drive
 
 logger = logging.getLogger(__name__)
 
-client = AsyncOpenAI(api_key=OPENROUTER_API_KEY, base_url=OPENROUTER_BASE_URL)
+client = AsyncOpenAI(api_key=OPENROUTER_API_KEY, base_url=OPENROUTER_BASE_URL, timeout=180.0)
 
 ANALYZE_PROMPT = """Your only task: read the generation prompt text printed on this image.
 
