@@ -93,7 +93,8 @@ async def _generate_header_intro(prompt: str, category: str) -> str:
     return resp.choices[0].message.content.strip()
 
 
-def _build_post(header_intro: str, prompt_text: str, category: str) -> str:
+def _build_post(header_intro: str, prompt_text: str, category: str) -> tuple[str, str]:
+    """Returns (main_text, prompt_block). main_text goes as photo caption, prompt_block as separate message."""
     # Parse Claude response: first line = header, rest = intro
     parts_raw = header_intro.split("\n\n", 1)
     header = parts_raw[0].strip()
@@ -106,8 +107,6 @@ def _build_post(header_intro: str, prompt_text: str, category: str) -> str:
     parts = [
         f"<b>⬆️ {html.escape(header)}</b>",
         html.escape(intro) if intro else None,
-        "<b>Копируй промпт \U0001f447</b>",
-        f"<pre>{html.escape(prompt_text)}</pre>",
     ]
     parts = [p for p in parts if p]
 
@@ -119,7 +118,10 @@ def _build_post(header_intro: str, prompt_text: str, category: str) -> str:
     if hashtag:
         parts.append(f"Категория: {hashtag}")
 
-    return "\n\n".join(parts)
+    main_text = "\n\n".join(parts)
+    prompt_block = f"<b>Копируй промпт \U0001f447</b>\n\n<pre>{html.escape(prompt_text)}</pre>"
+
+    return main_text, prompt_block
 
 
 async def _pick_images(ref_id: int) -> tuple[int, list[bytes]]:
@@ -162,23 +164,23 @@ async def post_tg(bot, tg_post_id: int, ref_id: int, prompt: str, category: str)
     logger.info(f"Posting TG post tg_post_id={tg_post_id} ref_id={ref_id}")
 
     header_intro = await _generate_header_intro(prompt, category)
-    text = _build_post(header_intro, prompt, category)
+    main_text, prompt_block = _build_post(header_intro, prompt, category)
     scenario, images = await _pick_images(ref_id)
 
     try:
         if not images:
-            await bot.send_message(TG_CHANNEL_ID, text, parse_mode="HTML", link_preview_options=LinkPreviewOptions(is_disabled=True))
+            await bot.send_message(TG_CHANNEL_ID, main_text, parse_mode="HTML", link_preview_options=LinkPreviewOptions(is_disabled=True))
         elif len(images) == 1:
             photo = BufferedInputFile(images[0], filename="image.jpg")
-            await bot.send_photo(TG_CHANNEL_ID, photo=photo)
-            await bot.send_message(TG_CHANNEL_ID, text, parse_mode="HTML", link_preview_options=LinkPreviewOptions(is_disabled=True))
+            await bot.send_photo(TG_CHANNEL_ID, photo=photo, caption=main_text, parse_mode="HTML")
         else:
             media = []
             for i, img_bytes in enumerate(images):
                 photo = BufferedInputFile(img_bytes, filename=f"image_{i}.jpg")
-                media.append(InputMediaPhoto(media=photo))
+                caption = main_text if i == 0 else None
+                media.append(InputMediaPhoto(media=photo, caption=caption, parse_mode="HTML" if caption else None))
             await bot.send_media_group(TG_CHANNEL_ID, media=media)
-            await bot.send_message(TG_CHANNEL_ID, text, parse_mode="HTML", link_preview_options=LinkPreviewOptions(is_disabled=True))
+        await bot.send_message(TG_CHANNEL_ID, prompt_block, parse_mode="HTML", link_preview_options=LinkPreviewOptions(is_disabled=True))
 
         now = datetime.now(timezone.utc).isoformat()
         async with aiosqlite.connect(DB_PATH) as db:
