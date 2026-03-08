@@ -105,7 +105,7 @@ def _build_post(header_intro: str, prompt_text: str, category: str) -> tuple[str
     full_cat = category if category.startswith("ПРОМПТЫ") else f"ПРОМПТЫ / {category}"
 
     parts = [
-        f"<b>⬆️ {html.escape(header)}</b>",
+        f"<b>{html.escape(header)}</b>",
         html.escape(intro) if intro else None,
     ]
     parts = [p for p in parts if p]
@@ -125,7 +125,12 @@ def _build_post(header_intro: str, prompt_text: str, category: str) -> tuple[str
 
 
 async def _pick_images(ref_id: int) -> tuple[int, list[bytes]]:
-    """Pick images by random scenario. Returns (scenario, list_of_image_bytes)."""
+    """Pick images by random scenario. Returns (scenario, list_of_image_bytes).
+    Scenario 1: 2 pins (1 NanaBana + 1 SeeDream)
+    Scenario 2: 2 clean images
+    Scenario 3: 4 clean images
+    Scenario 4: 4 pins (2 NanaBana + 2 SeeDream)
+    """
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
@@ -136,17 +141,23 @@ async def _pick_images(ref_id: int) -> tuple[int, list[bytes]]:
             files = [dict(r) for r in await cur.fetchall()]
 
     clean_files = [f for f in files if f["type"] == "clean"]
-    pin_files = [f for f in files if f["type"] == "pin"]
+    sd_pins = [f for f in files if f["type"] == "pin" and f["model"] == "seedream"]
+    nb_pins = [f for f in files if f["type"] == "pin" and f["model"] == "nanobana"]
 
-    # Scenario weights: 1 clean (40%), 3 clean (40%), 1 pin (20%)
-    scenario = random.choices([1, 2, 3], weights=[40, 40, 20])[0]
+    scenario = random.choices([1, 2, 3, 4], weights=[30, 25, 20, 25])[0]
 
     if scenario == 1:
-        chosen = random.sample(clean_files, min(1, len(clean_files)))
+        # 1 NanaBana pin + 1 SeeDream pin
+        chosen = []
+        if nb_pins: chosen.append(random.choice(nb_pins))
+        if sd_pins: chosen.append(random.choice(sd_pins))
     elif scenario == 2:
-        chosen = random.sample(clean_files, min(3, len(clean_files)))
+        chosen = random.sample(clean_files, min(2, len(clean_files)))
+    elif scenario == 3:
+        chosen = random.sample(clean_files, min(4, len(clean_files)))
     else:
-        chosen = random.sample(pin_files, min(1, len(pin_files)))
+        # 2 NanaBana pins + 2 SeeDream pins
+        chosen = random.sample(nb_pins, min(2, len(nb_pins))) + random.sample(sd_pins, min(2, len(sd_pins)))
 
     images = []
     for f in chosen:
