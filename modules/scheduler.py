@@ -371,10 +371,14 @@ async def _check_posting_completion(bot, chat_id: int):
         async with aiosqlite.connect(DB_PATH) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
-                "SELECT COUNT(*) as cnt FROM pins_schedule WHERE status = 'pending'"
+                "SELECT COUNT(*) as total, "
+                "SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) as pending "
+                "FROM pins_schedule"
             ) as cur:
                 row = await cur.fetchone()
-        if row and row["cnt"] == 0:
+        total_pins = row["total"] or 0 if row else 0
+        pending_pins = row["pending"] or 0 if row else 0
+        if total_pins > 0 and pending_pins == 0:
             await set_state(posting_status="done")
             await bot.send_message(
                 chat_id,

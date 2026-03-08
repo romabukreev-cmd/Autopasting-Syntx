@@ -63,6 +63,7 @@ def kb_pinterest(week: int = 1):
             InlineKeyboardButton(text="Сбросить статусы", callback_data="pin:reset"),
             InlineKeyboardButton(text="🗑 Очистить всё", callback_data="pin:clear"),
         ],
+        [InlineKeyboardButton(text="🗑 Сбросить анализ (рефы + всё)", callback_data="pin:clear_refs")],
         [InlineKeyboardButton(text="← Назад", callback_data="menu:main")],
     ])
 
@@ -403,6 +404,55 @@ async def cb_clear(call: CallbackQuery):
     except Exception as e:
         logger.error(f"Clear failed: {e}")
         await call.message.answer(f"Ошибка при очистке: {e}")
+
+
+# --- pin:clear_refs — wipe refs (prompts) + everything dependent ---
+
+@router.callback_query(F.data == "pin:clear_refs")
+@admin_only
+async def cb_clear_refs(call: CallbackQuery):
+    await call.answer("Сбрасываю анализ...", show_alert=False)
+    await call.message.answer("Сбрасываю все рефы и промпты (генерации, расписание, TG-посты тоже)...")
+    import aiosqlite
+    from config import DB_PATH, DRIVE_BASE_PATH, DRIVE_FOLDER_GENS
+    from modules import drive
+
+    try:
+        # Purge Drive generations folder
+        gens_path = f"{DRIVE_BASE_PATH}/{DRIVE_FOLDER_GENS}"
+        await drive.purge_folder(gens_path)
+
+        # Clear all tables including refs
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("DELETE FROM generation_files")
+            await db.execute("DELETE FROM generations")
+            await db.execute("DELETE FROM pins_schedule")
+            await db.execute("DELETE FROM tg_posts")
+            await db.execute("DELETE FROM refs")
+            await db.commit()
+
+        await set_state(
+            analysis_status="idle",
+            generation_status="idle",
+            posting_status="idle",
+            posting_start_date=None,
+            posting_end_date=None,
+        )
+
+        state = await get_state()
+        week = state.get("active_week") or 1
+        await call.message.answer(
+            "Готово. Все рефы, промпты, генерации и расписание удалены.\n"
+            "Теперь можно загружать новые референсы и запускать анализ."
+        )
+        try:
+            await call.message.edit_text("Pinterest", reply_markup=kb_pinterest(week))
+        except Exception:
+            pass
+
+    except Exception as e:
+        logger.error(f"Clear refs failed: {e}")
+        await call.message.answer(f"Ошибка при сбросе: {e}")
 
 
 # --- Reply keyboard text handlers ---
