@@ -299,9 +299,9 @@ async def _check_ref_tg_trigger(ref_id: int):
         if total == 0 or done + failed < total:
             return
 
-        # Check if TG post already created for this ref
+        # Check if TG post already pending for this ref (posted = old cycle, allow new one)
         async with db.execute(
-            "SELECT id FROM tg_posts WHERE ref_id = ?", (ref_id,)
+            "SELECT id FROM tg_posts WHERE ref_id = ? AND status = 'pending'", (ref_id,)
         ) as cur:
             existing = await cur.fetchone()
         if existing:
