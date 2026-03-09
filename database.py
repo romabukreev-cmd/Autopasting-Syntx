@@ -84,6 +84,7 @@ async def init_db():
         # Migrations for existing DBs
         for col, definition in [
             ("tg_posting_status", "TEXT NOT NULL DEFAULT 'idle'"),
+            ("menu_msg_id", "INTEGER"),
         ]:
             try:
                 await db.execute(f"ALTER TABLE bot_state ADD COLUMN {col} {definition}")

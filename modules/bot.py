@@ -15,23 +15,21 @@ from database import get_state, set_state
 router = Router()
 logger = logging.getLogger(__name__)
 
-_menu_msg_id: int | None = None
-
-
 async def _show_menu(bot, chat_id: int, text: str, markup) -> None:
     """Edit the persistent menu message in place, or send a new one."""
-    global _menu_msg_id
-    if _menu_msg_id:
+    state = await get_state()
+    menu_msg_id = state.get("menu_msg_id")
+    if menu_msg_id:
         try:
             await bot.edit_message_text(
-                chat_id=chat_id, message_id=_menu_msg_id,
+                chat_id=chat_id, message_id=menu_msg_id,
                 text=text, reply_markup=markup,
             )
             return
         except Exception:
             pass
     sent = await bot.send_message(chat_id, text, reply_markup=markup)
-    _menu_msg_id = sent.message_id
+    await set_state(menu_msg_id=sent.message_id)
 
 
 # --- Keyboards ---
@@ -106,6 +104,7 @@ def admin_only(func):
 @router.message(Command("start"))
 @admin_only
 async def cmd_start(message: Message):
+    await set_state(menu_msg_id=None)
     await message.answer("Контент-завод Syntx", reply_markup=kb_reply_main())
     await _show_menu(message.bot, message.chat.id, "Выбери площадку:", kb_main())
 
