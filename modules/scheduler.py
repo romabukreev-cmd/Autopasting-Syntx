@@ -291,17 +291,18 @@ async def publish_due_pins(bot, admin_chat_id: int):
             category=row["category"],
             board_id=row["board_id"],
         )
+        ref_id = row["ref_id"]
         if ok:
-            # Check if all pins for this ref are now published → trigger TG post
-            ref_id = row["ref_id"]
-            if ref_id:
-                await _check_ref_tg_trigger(ref_id)
+            pass
         else:
             async with aiosqlite.connect(DB_PATH) as db:
                 await db.execute(
                     "UPDATE pins_schedule SET status = 'failed' WHERE id = ?", (row["id"],)
                 )
                 await db.commit()
+        # Check TG trigger after both success and failure
+        if ref_id:
+            await _check_ref_tg_trigger(ref_id)
         await _ensure_today_quota(now)
         await asyncio.sleep(DELAY_MAKE_WEBHOOK)
 
