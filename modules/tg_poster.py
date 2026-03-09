@@ -179,14 +179,22 @@ async def post_tg(bot, tg_post_id: int, ref_id: int, prompt: str, category: str)
     """Generate post text, pick images, post to TG channel, update DB."""
     logger.info(f"Posting TG post tg_post_id={tg_post_id} ref_id={ref_id}")
 
-    header_intro = await _generate_header_intro(prompt, category)
-    main_text, prompt_block = _build_post(header_intro, prompt, category)
     scenario, images = await _pick_images(ref_id)
 
+    if not images:
+        logger.warning(f"No images for tg_post_id={tg_post_id} ref_id={ref_id}, skipping")
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                "UPDATE tg_posts SET status = 'skipped' WHERE id = ?", (tg_post_id,)
+            )
+            await db.commit()
+        return
+
+    header_intro = await _generate_header_intro(prompt, category)
+    main_text, prompt_block = _build_post(header_intro, prompt, category)
+
     try:
-        if not images:
-            await bot.send_message(TG_CHANNEL_ID, main_text, parse_mode="HTML", link_preview_options=LinkPreviewOptions(is_disabled=True))
-        elif len(images) == 1:
+        if len(images) == 1:
             photo = BufferedInputFile(images[0], filename="image.jpg")
             await bot.send_photo(TG_CHANNEL_ID, photo=photo, caption=main_text, parse_mode="HTML")
         else:
