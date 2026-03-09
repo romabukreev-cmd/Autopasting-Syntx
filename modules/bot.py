@@ -51,17 +51,13 @@ def kb_pinterest(week: int = 1):
             InlineKeyboardButton(text="▶", callback_data=f"pin:week:{week + 1}"),
         ],
         [InlineKeyboardButton(text=f"▶ Генерация недели {week}", callback_data=f"pin:generate:{week}")],
-        [
-            InlineKeyboardButton(text="Запустить постинг", callback_data="pin:start"),
-            InlineKeyboardButton(text="🧪 Тест (сразу)", callback_data="pin:test"),
-        ],
+        [InlineKeyboardButton(text="Запустить постинг", callback_data="pin:start")],
         [InlineKeyboardButton(text="Повторить упавшие", callback_data="pin:retry")],
-        [InlineKeyboardButton(text="Статус", callback_data="pin:status")],
         [
+            InlineKeyboardButton(text="Статус", callback_data="pin:status"),
             InlineKeyboardButton(text="Сбросить статусы", callback_data="pin:reset"),
-            InlineKeyboardButton(text="🗑 Очистить всё", callback_data="pin:clear"),
         ],
-        [InlineKeyboardButton(text="🗑 Сбросить анализ (рефы + всё)", callback_data="pin:clear_refs")],
+        [InlineKeyboardButton(text="🗑 Очистить всё", callback_data="pin:clear")],
         [InlineKeyboardButton(text="← Назад", callback_data="menu:main")],
     ])
 
@@ -224,19 +220,6 @@ async def cb_start_posting(call: CallbackQuery):
     asyncio.create_task(setup_posting_schedule(call.bot, call.message.chat.id))
 
 
-@router.callback_query(F.data == "pin:test")
-@admin_only
-async def cb_test_posting(call: CallbackQuery):
-    state = await get_state()
-    if state.get("generation_status") not in ("done", "partial"):
-        await call.answer("Сначала завершите генерацию.", show_alert=True)
-        return
-    await call.answer("Запускаю тест...")
-    await call.message.answer("Публикую все пины немедленно (тестовый режим)...")
-    from modules.scheduler import setup_test_schedule
-    asyncio.create_task(setup_test_schedule(call.bot, call.message.chat.id))
-
-
 @router.callback_query(F.data == "pin:retry")
 @admin_only
 async def cb_retry(call: CallbackQuery):
@@ -375,69 +358,21 @@ async def cmd_retry(message: Message):
     asyncio.create_task(run_retry(message.bot, message.chat.id))
 
 
-# --- pin:clear — wipe Drive generations + DB ---
+# --- pin:clear — wipe everything (Drive + all DB tables + statuses) ---
 
 @router.callback_query(F.data == "pin:clear")
 @admin_only
 async def cb_clear(call: CallbackQuery):
     await call.answer("Очищаю...", show_alert=False)
-    await call.message.answer("Очищаю базу и папки генераций на Drive...")
+    await call.message.answer("Очищаю всё: Drive, базу, рефы, промпты, расписание...")
     import aiosqlite
     from config import DB_PATH, DRIVE_BASE_PATH, DRIVE_FOLDER_GENS
     from modules import drive
 
     try:
-        # Purge Drive generations folder
         gens_path = f"{DRIVE_BASE_PATH}/{DRIVE_FOLDER_GENS}"
         await drive.purge_folder(gens_path)
 
-        # Clear DB tables
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute("DELETE FROM generation_files")
-            await db.execute("DELETE FROM generations")
-            await db.execute("DELETE FROM pins_schedule")
-            await db.execute("DELETE FROM tg_posts")
-            await db.commit()
-
-        # Reset statuses
-        await set_state(
-            analysis_status="idle",
-            generation_status="idle",
-            posting_status="idle",
-            posting_start_date=None,
-            posting_end_date=None,
-        )
-
-        state = await get_state()
-        week = state.get("active_week") or 1
-        await call.message.answer("Готово. Генерации и расписание очищены. Референсы сохранены.")
-        try:
-            await call.message.edit_text("Pinterest", reply_markup=kb_pinterest(week))
-        except Exception:
-            pass
-
-    except Exception as e:
-        logger.error(f"Clear failed: {e}")
-        await call.message.answer(f"Ошибка при очистке: {e}")
-
-
-# --- pin:clear_refs — wipe refs (prompts) + everything dependent ---
-
-@router.callback_query(F.data == "pin:clear_refs")
-@admin_only
-async def cb_clear_refs(call: CallbackQuery):
-    await call.answer("Сбрасываю анализ...", show_alert=False)
-    await call.message.answer("Сбрасываю все рефы и промпты (генерации, расписание, TG-посты тоже)...")
-    import aiosqlite
-    from config import DB_PATH, DRIVE_BASE_PATH, DRIVE_FOLDER_GENS
-    from modules import drive
-
-    try:
-        # Purge Drive generations folder
-        gens_path = f"{DRIVE_BASE_PATH}/{DRIVE_FOLDER_GENS}"
-        await drive.purge_folder(gens_path)
-
-        # Clear all tables including refs
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute("DELETE FROM generation_files")
             await db.execute("DELETE FROM generations")
@@ -456,18 +391,15 @@ async def cb_clear_refs(call: CallbackQuery):
 
         state = await get_state()
         week = state.get("active_week") or 1
-        await call.message.answer(
-            "Готово. Все рефы, промпты, генерации и расписание удалены.\n"
-            "Теперь можно загружать новые референсы и запускать анализ."
-        )
+        await call.message.answer("Готово. Всё очищено. Можно загружать новые референсы.")
         try:
             await call.message.edit_text("Pinterest", reply_markup=kb_pinterest(week))
         except Exception:
             pass
 
     except Exception as e:
-        logger.error(f"Clear refs failed: {e}")
-        await call.message.answer(f"Ошибка при сбросе: {e}")
+        logger.error(f"Clear failed: {e}")
+        await call.message.answer(f"Ошибка при очистке: {e}")
 
 
 # --- Reply keyboard text handlers ---
