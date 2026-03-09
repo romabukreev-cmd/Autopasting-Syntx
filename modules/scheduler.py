@@ -302,7 +302,7 @@ async def publish_due_pins(bot, admin_chat_id: int):
                     "UPDATE pins_schedule SET status = 'failed' WHERE id = ?", (row["id"],)
                 )
                 await db.commit()
-            await _ensure_today_quota(now)
+        await _ensure_today_quota(now)
         await asyncio.sleep(DELAY_MAKE_WEBHOOK)
 
     await _check_posting_completion(bot, admin_chat_id)
