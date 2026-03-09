@@ -11,8 +11,25 @@ from modules import sheets
 logger = logging.getLogger(__name__)
 
 
+async def _check_file_accessible(file_id: str) -> bool:
+    """HEAD-запрос к lh3 URL. Файл доступен если Content-Type начинается с image/."""
+    url = f"https://lh3.googleusercontent.com/d/{file_id}"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.head(url, allow_redirects=True,
+                                    timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                ct = resp.headers.get("Content-Type", "")
+                return ct.startswith("image/")
+    except Exception:
+        return False
+
+
 async def publish_pin(pin_id: int, file_id: str, category: str, board_id: str) -> bool:
     """Send one pin to Make.com webhook. Returns True on success."""
+    if not await _check_file_accessible(file_id):
+        logger.warning(f"File {file_id} not accessible on Drive, skipping pin {pin_id}")
+        return False
+
     if not sheets.get_cached():
         try:
             await sheets.load_sheets()

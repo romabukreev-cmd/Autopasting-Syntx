@@ -267,6 +267,16 @@ async def publish_due_pins(bot, admin_chat_id: int):
                 await db.execute(
                     "UPDATE pins_schedule SET status = 'failed' WHERE id = ?", (row["id"],)
                 )
+                # Ускорить следующий pending пин — он подхватится на следующем тике
+                async with db.execute(
+                    "SELECT id FROM pins_schedule WHERE status = 'pending' ORDER BY scheduled_at LIMIT 1"
+                ) as cur:
+                    next_pin = await cur.fetchone()
+                if next_pin:
+                    await db.execute(
+                        "UPDATE pins_schedule SET scheduled_at = ? WHERE id = ?",
+                        (now, next_pin[0]),
+                    )
                 await db.commit()
         await asyncio.sleep(DELAY_MAKE_WEBHOOK)
 
