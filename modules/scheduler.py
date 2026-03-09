@@ -238,6 +238,40 @@ async def setup_test_schedule(bot, chat_id: int):
         await set_state(posting_status="idle")
 
 
+async def _ensure_today_quota(now: str):
+    """Accelerate enough future pins to fill today's quota (IMAGES_PER_DAY_MIN)."""
+    now_dt = datetime.now(tz)
+    today_end = now_dt.replace(hour=23, minute=59, second=59, microsecond=0).isoformat()
+    today_start = now_dt.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT COUNT(*) FROM pins_schedule WHERE status = 'published' AND published_at >= ?",
+            (today_start,),
+        ) as cur:
+            published_today = (await cur.fetchone())[0]
+        async with db.execute(
+            "SELECT COUNT(*) FROM pins_schedule WHERE status = 'pending' AND scheduled_at <= ?",
+            (today_end,),
+        ) as cur:
+            pending_today = (await cur.fetchone())[0]
+
+        needed = max(0, IMAGES_PER_DAY_MIN - published_today - pending_today)
+        if needed > 0:
+            async with db.execute(
+                "SELECT id FROM pins_schedule WHERE status = 'pending' AND scheduled_at > ? "
+                "ORDER BY scheduled_at LIMIT ?",
+                (today_end, needed),
+            ) as cur:
+                future_pins = await cur.fetchall()
+            for p in future_pins:
+                await db.execute(
+                    "UPDATE pins_schedule SET scheduled_at = ? WHERE id = ?",
+                    (now, p[0]),
+                )
+            await db.commit()
+
+
 async def publish_due_pins(bot, admin_chat_id: int):
     """Called by APScheduler every minute. Publishes pins whose scheduled_at has passed."""
     now = datetime.now(tz).isoformat()
@@ -267,17 +301,8 @@ async def publish_due_pins(bot, admin_chat_id: int):
                 await db.execute(
                     "UPDATE pins_schedule SET status = 'failed' WHERE id = ?", (row["id"],)
                 )
-                # Ускорить следующий pending пин — он подхватится на следующем тике
-                async with db.execute(
-                    "SELECT id FROM pins_schedule WHERE status = 'pending' ORDER BY scheduled_at LIMIT 1"
-                ) as cur:
-                    next_pin = await cur.fetchone()
-                if next_pin:
-                    await db.execute(
-                        "UPDATE pins_schedule SET scheduled_at = ? WHERE id = ?",
-                        (now, next_pin[0]),
-                    )
                 await db.commit()
+            await _ensure_today_quota(now)
         await asyncio.sleep(DELAY_MAKE_WEBHOOK)
 
     await _check_posting_completion(bot, admin_chat_id)
