@@ -129,7 +129,8 @@ async def _pick_images(ref_id: int) -> tuple[int, list[bytes]]:
     Scenario 1: 2 pins (1 NanaBana + 1 SeeDream)
     Scenario 2: 2 clean images
     Scenario 3: 4 clean images
-    Scenario 4: 4 pins (2 NanaBana + 2 SeeDream)
+    Scenario 4: 1 clean image (без текста)
+    Scenario 5: 1 pin (с текстом)
     """
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
@@ -143,8 +144,9 @@ async def _pick_images(ref_id: int) -> tuple[int, list[bytes]]:
     clean_files = [f for f in files if f["type"] == "clean"]
     sd_pins = [f for f in files if f["type"] == "pin" and f["model"] == "seedream"]
     nb_pins = [f for f in files if f["type"] == "pin" and f["model"] == "nanobana"]
+    all_pins = sd_pins + nb_pins
 
-    scenario = random.choices([1, 2, 3, 4], weights=[30, 25, 20, 25])[0]
+    scenario = random.choices([1, 2, 3, 4, 5], weights=[20, 20, 20, 20, 20])[0]
 
     if scenario == 1:
         # 1 NanaBana pin + 1 SeeDream pin
@@ -155,9 +157,12 @@ async def _pick_images(ref_id: int) -> tuple[int, list[bytes]]:
         chosen = random.sample(clean_files, min(2, len(clean_files)))
     elif scenario == 3:
         chosen = random.sample(clean_files, min(4, len(clean_files)))
+    elif scenario == 4:
+        # 1 чистое изображение (без текста)
+        chosen = random.sample(clean_files, min(1, len(clean_files)))
     else:
-        # 2 NanaBana pins + 2 SeeDream pins
-        chosen = random.sample(nb_pins, min(2, len(nb_pins))) + random.sample(sd_pins, min(2, len(sd_pins)))
+        # 1 пин (с текстом/overlay)
+        chosen = [random.choice(all_pins)] if all_pins else []
 
     images = []
     for f in chosen:
