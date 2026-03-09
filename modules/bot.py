@@ -267,6 +267,22 @@ async def cb_status(call: CallbackQuery):
         lines.append(f"Начат: {state['posting_start_date']}")
     if state.get("posting_end_date"):
         lines.append(f"Окончание: {state['posting_end_date']}")
+    import aiosqlite
+    from config import DB_PATH
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT "
+            "SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) as pending, "
+            "SUM(CASE WHEN status='published' THEN 1 ELSE 0 END) as published, "
+            "SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) as failed "
+            "FROM pins_schedule"
+        ) as cur:
+            row = await cur.fetchone()
+    if row:
+        lines.append(
+            f"\nПинов: ожидают {row['pending'] or 0} · опубликовано {row['published'] or 0} · пропущено {row['failed'] or 0}"
+        )
     await call.answer()
     await call.message.answer("\n".join(lines))
 
