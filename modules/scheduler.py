@@ -276,6 +276,9 @@ async def publish_due_pins(bot, admin_chat_id: int):
     """Called by APScheduler every minute. Publishes pins whose scheduled_at has passed."""
     now = datetime.now(tz).isoformat()
 
+    # Проверяем квоту в начале каждого тика — если день пустой, заполним
+    await _ensure_today_quota(now)
+
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
