@@ -264,11 +264,17 @@ async def _ensure_today_quota(now: str):
                 (today_end, needed),
             ) as cur:
                 future_pins = await cur.fetchall()
-            for p in future_pins:
-                await db.execute(
-                    "UPDATE pins_schedule SET scheduled_at = ? WHERE id = ?",
-                    (now, p[0]),
-                )
+            if future_pins:
+                # Spread pulled pins evenly from now to end of day (min 60s apart)
+                remaining_seconds = max(0, (today_end - now_dt).total_seconds())
+                count = len(future_pins)
+                interval = max(60, remaining_seconds / max(count, 1))
+                for i, p in enumerate(future_pins):
+                    slot_dt = now_dt + timedelta(seconds=i * interval)
+                    await db.execute(
+                        "UPDATE pins_schedule SET scheduled_at = ? WHERE id = ?",
+                        (slot_dt.isoformat(), p[0]),
+                    )
             await db.commit()
 
 
