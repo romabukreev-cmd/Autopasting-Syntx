@@ -241,7 +241,8 @@ async def setup_test_schedule(bot, chat_id: int):
 async def _ensure_today_quota(now: str):
     """Accelerate enough future pins to fill today's quota (IMAGES_PER_DAY_MIN)."""
     now_dt = datetime.now(tz)
-    today_end = now_dt.replace(hour=23, minute=59, second=59, microsecond=0).isoformat()
+    today_end_dt = now_dt.replace(hour=23, minute=59, second=59, microsecond=0)
+    today_end = today_end_dt.isoformat()
     today_start = now_dt.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
 
     async with aiosqlite.connect(DB_PATH) as db:
@@ -266,7 +267,7 @@ async def _ensure_today_quota(now: str):
                 future_pins = await cur.fetchall()
             if future_pins:
                 # Spread pulled pins evenly from now to end of day (min 60s apart)
-                remaining_seconds = max(0, (today_end - now_dt).total_seconds())
+                remaining_seconds = max(0, (today_end_dt - now_dt).total_seconds())
                 count = len(future_pins)
                 interval = max(60, remaining_seconds / max(count, 1))
                 for i, p in enumerate(future_pins):
