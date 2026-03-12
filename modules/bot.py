@@ -134,6 +134,32 @@ async def cb_menu_telegram(call: CallbackQuery):
     await call.message.edit_text("Telegram", reply_markup=kb_telegram())
 
 
+@router.callback_query(F.data.startswith("tg:approve:"))
+@admin_only
+async def cb_tg_approve(call: CallbackQuery):
+    tg_post_id = int(call.data.split(":")[2])
+    from modules.tg_poster import publish_approved
+    try:
+        ok = await publish_approved(call.bot, tg_post_id)
+        if ok:
+            await call.message.edit_reply_markup(reply_markup=None)
+            await call.answer("Опубликовано в канал")
+        else:
+            await call.answer("Пост уже обработан или истёк", show_alert=True)
+    except Exception as e:
+        await call.answer(f"Ошибка: {e}", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("tg:cancel:"))
+@admin_only
+async def cb_tg_cancel(call: CallbackQuery):
+    tg_post_id = int(call.data.split(":")[2])
+    from modules.tg_poster import cancel_post
+    await cancel_post(call.bot, tg_post_id)
+    await call.message.edit_reply_markup(reply_markup=None)
+    await call.answer("Пост отменён")
+
+
 @router.callback_query(F.data == "tg:status")
 @admin_only
 async def cb_tg_status(call: CallbackQuery):

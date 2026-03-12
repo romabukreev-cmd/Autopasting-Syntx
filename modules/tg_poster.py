@@ -4,10 +4,14 @@ import random
 from datetime import datetime, timezone
 
 import aiosqlite
-from aiogram.types import BufferedInputFile, InputMediaPhoto, LinkPreviewOptions
+from aiogram.types import (
+    BufferedInputFile, InlineKeyboardButton, InlineKeyboardMarkup,
+    InputMediaPhoto, LinkPreviewOptions,
+)
 from openai import AsyncOpenAI
 
 from config import (
+    ADMIN_USER_ID,
     DB_PATH,
     MODEL_TG_POST,
     OPENROUTER_API_KEY,
@@ -19,6 +23,11 @@ from modules import drive
 logger = logging.getLogger(__name__)
 
 client = AsyncOpenAI(api_key=OPENROUTER_API_KEY, base_url=OPENROUTER_BASE_URL)
+
+# Pending posts awaiting admin approval: tg_post_id → {images, main_text, prompt_block, scenario}
+_PENDING: dict[int, dict] = {}
+
+TG_CAPTION_LIMIT = 1024  # Telegram photo caption limit
 
 TG_POST_PROMPT = """Ты — копирайтер Telegram-канала про нейросети и промпты.
 Твоя задача — написать короткую подводку к посту с промптом для генерации изображения.
@@ -127,6 +136,12 @@ def _build_post(header_intro: str, prompt_text: str, category: str) -> tuple[str
     return main_text, prompt_block
 
 
+def _combined_caption(main_text: str, prompt_block: str) -> str | None:
+    """If main_text + prompt_block fit in TG caption limit, return combined string. Else None."""
+    combined = f"{main_text}\n\n{prompt_block}"
+    return combined if len(combined) <= TG_CAPTION_LIMIT else None
+
+
 async def _pick_images(ref_id: int) -> tuple[int, list[bytes]]:
     """Pick images by random scenario. Returns (scenario, list_of_image_bytes).
     Scenario 1: 2 pins (1 NanaBana + 1 SeeDream)
@@ -178,9 +193,34 @@ async def _pick_images(ref_id: int) -> tuple[int, list[bytes]]:
     return scenario, images
 
 
+async def _send_to_chat(bot, chat_id: int, images: list[bytes], main_text: str,
+                        prompt_block: str, extra_markup=None):
+    """Send post (images + text) to a given chat. Combines into one message if fits, else two."""
+    combined = _combined_caption(main_text, prompt_block)
+    caption = combined if combined else main_text
+
+    if len(images) == 1:
+        photo = BufferedInputFile(images[0], filename="image.jpg")
+        await bot.send_photo(chat_id, photo=photo, caption=caption, parse_mode="HTML",
+                             reply_markup=extra_markup if combined else None)
+    else:
+        media = []
+        for i, img_bytes in enumerate(images):
+            photo = BufferedInputFile(img_bytes, filename=f"image_{i}.jpg")
+            c = caption if i == 0 else None
+            media.append(InputMediaPhoto(media=photo, caption=c,
+                                         parse_mode="HTML" if c else None))
+        await bot.send_media_group(chat_id, media=media)
+
+    if not combined:
+        await bot.send_message(chat_id, prompt_block, parse_mode="HTML",
+                               link_preview_options=LinkPreviewOptions(is_disabled=True),
+                               reply_markup=extra_markup)
+
+
 async def post_tg(bot, tg_post_id: int, ref_id: int, prompt: str, category: str):
-    """Generate post text, pick images, post to TG channel, update DB."""
-    logger.info(f"Posting TG post tg_post_id={tg_post_id} ref_id={ref_id}")
+    """Generate post text, pick images, send to admin for approval."""
+    logger.info(f"Preparing TG post tg_post_id={tg_post_id} ref_id={ref_id}")
 
     scenario, images = await _pick_images(ref_id)
 
@@ -196,28 +236,69 @@ async def post_tg(bot, tg_post_id: int, ref_id: int, prompt: str, category: str)
     header_intro = await _generate_header_intro(prompt, category)
     main_text, prompt_block = _build_post(header_intro, prompt, category)
 
+    # Store for later approval
+    _PENDING[tg_post_id] = {
+        "images": images,
+        "main_text": main_text,
+        "prompt_block": prompt_block,
+        "scenario": scenario,
+    }
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE tg_posts SET status = 'pending_approval', scenario = ? WHERE id = ?",
+            (scenario, tg_post_id),
+        )
+        await db.commit()
+
+    # Send preview to admin
+    approve_kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Опубликовать", callback_data=f"tg:approve:{tg_post_id}"),
+        InlineKeyboardButton(text="❌ Отменить", callback_data=f"tg:cancel:{tg_post_id}"),
+    ]])
+
+    await bot.send_message(ADMIN_USER_ID, f"<b>Превью поста #{tg_post_id}</b>", parse_mode="HTML")
+    await _send_to_chat(bot, ADMIN_USER_ID, images, main_text, prompt_block,
+                        extra_markup=approve_kb)
+    logger.info(f"TG post {tg_post_id} sent to admin for approval")
+
+
+async def publish_approved(bot, tg_post_id: int) -> bool:
+    """Called when admin approves. Publishes to TG channel."""
+    pending = _PENDING.pop(tg_post_id, None)
+    if not pending:
+        return False
+
+    images = pending["images"]
+    main_text = pending["main_text"]
+    prompt_block = pending["prompt_block"]
+    scenario = pending["scenario"]
+
     try:
-        if len(images) == 1:
-            photo = BufferedInputFile(images[0], filename="image.jpg")
-            await bot.send_photo(TG_CHANNEL_ID, photo=photo, caption=main_text, parse_mode="HTML")
-        else:
-            media = []
-            for i, img_bytes in enumerate(images):
-                photo = BufferedInputFile(img_bytes, filename=f"image_{i}.jpg")
-                caption = main_text if i == 0 else None
-                media.append(InputMediaPhoto(media=photo, caption=caption, parse_mode="HTML" if caption else None))
-            await bot.send_media_group(TG_CHANNEL_ID, media=media)
-        await bot.send_message(TG_CHANNEL_ID, prompt_block, parse_mode="HTML", link_preview_options=LinkPreviewOptions(is_disabled=True))
+        await _send_to_chat(bot, TG_CHANNEL_ID, images, main_text, prompt_block)
 
         now = datetime.now(timezone.utc).isoformat()
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute(
-                "UPDATE tg_posts SET status = 'posted', scenario = ?, posted_at = ? WHERE id = ?",
-                (scenario, now, tg_post_id),
+                "UPDATE tg_posts SET status = 'posted', posted_at = ? WHERE id = ?",
+                (now, tg_post_id),
             )
             await db.commit()
-        logger.info(f"TG post {tg_post_id} published (scenario={scenario})")
+        logger.info(f"TG post {tg_post_id} published to channel (scenario={scenario})")
+        return True
 
     except Exception as e:
-        logger.error(f"Failed to send TG post {tg_post_id}: {e}")
+        logger.error(f"Failed to publish approved TG post {tg_post_id}: {e}")
+        _PENDING[tg_post_id] = pending  # put back so admin can retry
         raise
+
+
+async def cancel_post(bot, tg_post_id: int):
+    """Called when admin cancels. Marks post as cancelled."""
+    _PENDING.pop(tg_post_id, None)
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE tg_posts SET status = 'cancelled' WHERE id = ?", (tg_post_id,)
+        )
+        await db.commit()
+    logger.info(f"TG post {tg_post_id} cancelled by admin")
