@@ -37,6 +37,7 @@ IMAGES_PER_WEEK = 100
 GENERATIONS_PER_PROMPT = 3  # сколько изображений генерить на каждой модели с одного промпта
 IMAGES_PER_DAY_MIN = 20
 IMAGES_PER_DAY_MAX = 20
+DAILY_PIN_HARD_LIMIT = 30  # абсолютный максимум пинов в день, защита от багов
 
 # Delays (seconds)
 DELAY_BETWEEN_GENERATIONS = 2

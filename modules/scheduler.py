@@ -25,6 +25,7 @@ async def publish_due_tg_posts_job():
 
 
 from config import (
+    DAILY_PIN_HARD_LIMIT,
     DB_PATH,
     DELAY_MAKE_WEBHOOK,
     IMAGES_PER_DAY_MAX,
@@ -281,7 +282,21 @@ async def _ensure_today_quota(now: str):
 
 async def publish_due_pins(bot, admin_chat_id: int):
     """Called by APScheduler every minute. Publishes pins whose scheduled_at has passed."""
-    now = datetime.now(tz).isoformat()
+    now_dt = datetime.now(tz)
+    now = now_dt.isoformat()
+    today_start = now_dt.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+
+    # Жёсткий лимит: не более DAILY_PIN_HARD_LIMIT пинов в сутки
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT COUNT(*) FROM pins_schedule WHERE status = 'published' AND published_at >= ?",
+            (today_start,),
+        ) as cur:
+            published_today = (await cur.fetchone())[0]
+    if published_today >= DAILY_PIN_HARD_LIMIT:
+        logger.warning(f"Daily hard limit {DAILY_PIN_HARD_LIMIT} reached ({published_today} published). Skipping tick.")
+        await _check_posting_completion(bot, admin_chat_id)
+        return
 
     # Проверяем квоту в начале каждого тика — если день пустой, заполним
     await _ensure_today_quota(now)
@@ -313,7 +328,6 @@ async def publish_due_pins(bot, admin_chat_id: int):
         # Check TG trigger after both success and failure
         if ref_id:
             await _check_ref_tg_trigger(ref_id)
-        await _ensure_today_quota(now)
         await asyncio.sleep(DELAY_MAKE_WEBHOOK)
 
     await _check_posting_completion(bot, admin_chat_id)
