@@ -194,15 +194,14 @@ async def _pick_images(ref_id: int) -> tuple[int, list[bytes]]:
 
 
 async def _send_to_chat(bot, chat_id: int, images: list[bytes], main_text: str,
-                        prompt_block: str, extra_markup=None):
+                        prompt_block: str):
     """Send post (images + text) to a given chat. Combines into one message if fits, else two."""
     combined = _combined_caption(main_text, prompt_block)
     caption = combined if combined else main_text
 
     if len(images) == 1:
         photo = BufferedInputFile(images[0], filename="image.jpg")
-        await bot.send_photo(chat_id, photo=photo, caption=caption, parse_mode="HTML",
-                             reply_markup=extra_markup if combined else None)
+        await bot.send_photo(chat_id, photo=photo, caption=caption, parse_mode="HTML")
     else:
         media = []
         for i, img_bytes in enumerate(images):
@@ -214,8 +213,7 @@ async def _send_to_chat(bot, chat_id: int, images: list[bytes], main_text: str,
 
     if not combined:
         await bot.send_message(chat_id, prompt_block, parse_mode="HTML",
-                               link_preview_options=LinkPreviewOptions(is_disabled=True),
-                               reply_markup=extra_markup)
+                               link_preview_options=LinkPreviewOptions(is_disabled=True))
 
 
 async def post_tg(bot, tg_post_id: int, ref_id: int, prompt: str, category: str):
@@ -258,8 +256,8 @@ async def post_tg(bot, tg_post_id: int, ref_id: int, prompt: str, category: str)
     ]])
 
     await bot.send_message(ADMIN_USER_ID, f"<b>Превью поста #{tg_post_id}</b>", parse_mode="HTML")
-    await _send_to_chat(bot, ADMIN_USER_ID, images, main_text, prompt_block,
-                        extra_markup=approve_kb)
+    await _send_to_chat(bot, ADMIN_USER_ID, images, main_text, prompt_block)
+    await bot.send_message(ADMIN_USER_ID, "Опубликовать?", reply_markup=approve_kb)
     logger.info(f"TG post {tg_post_id} sent to admin for approval")
 
 
