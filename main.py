@@ -17,8 +17,20 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+async def _reset_pending_approvals():
+    """On startup: reset pending_approval → pending so posts don't stay stuck after restart."""
+    import aiosqlite
+    from config import DB_PATH
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE tg_posts SET status = 'pending' WHERE status = 'pending_approval'"
+        )
+        await db.commit()
+
+
 async def main():
     await init_db()
+    await _reset_pending_approvals()
 
     bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher(storage=MemoryStorage())
