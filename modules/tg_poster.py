@@ -136,7 +136,7 @@ def _build_post(header_intro: str, prompt_text: str, category: str) -> tuple[str
         parts.append(f"Категория: {hashtag}")
 
     main_text = "\n\n".join(parts)
-    prompt_block = f"<b>Копируй промпт \U0001f447</b>\n\n<pre>{html.escape(prompt_text)}</pre>"
+    prompt_block = f"<b>Копируй промпт \U0001f447</b>\n\n<blockquote expandable><pre>{html.escape(prompt_text)}</pre></blockquote>"
 
     return main_text, prompt_block
 
