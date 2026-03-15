@@ -417,34 +417,19 @@ async def _check_posting_completion(bot, chat_id: int):
     if state.get("posting_status") != "running":
         return
 
-    end_date_str = state.get("posting_end_date")
-    if not end_date_str:
-        return
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT COUNT(*) FROM pins_schedule WHERE status = 'pending'"
+        ) as cur:
+            row = await cur.fetchone()
+    pending_pins = row[0] if row else 0
 
-    end_date = date.fromisoformat(end_date_str)
-    today = date.today()
-    days_left = (end_date - today).days
-
-    if days_left == 2:
-        await bot.send_message(chat_id, "Через 2 дня постинг завершается. Подготовь новые референсы.")
-    elif days_left < 0:
-        async with aiosqlite.connect(DB_PATH) as db:
-            db.row_factory = aiosqlite.Row
-            async with db.execute(
-                "SELECT COUNT(*) as total, "
-                "SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) as pending "
-                "FROM pins_schedule"
-            ) as cur:
-                row = await cur.fetchone()
-        total_pins = row["total"] or 0 if row else 0
-        pending_pins = row["pending"] or 0 if row else 0
-        if total_pins > 0 and pending_pins == 0:
-            await set_state(posting_status="done")
-            await bot.send_message(
-                chat_id,
-                "Постинг завершён! Все пины опубликованы.\n\n"
-                "Запустить новый цикл? → /pinterest_analyze"
-            )
+    if pending_pins == 0:
+        await set_state(posting_status="done")
+        await bot.send_message(
+            chat_id,
+            "Постинг завершён. Все пины опубликованы.\n\nЗапустить новый цикл? → /pinterest_analyze"
+        )
 
 
 async def cleanup_old_pinterest_files():

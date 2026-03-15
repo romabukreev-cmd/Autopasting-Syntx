@@ -160,6 +160,20 @@ async def cb_tg_cancel(call: CallbackQuery):
     await call.answer("Пост отменён")
 
 
+@router.callback_query(F.data.startswith("tg:edit:"))
+@admin_only
+async def cb_tg_edit(call: CallbackQuery):
+    tg_post_id = int(call.data.split(":")[2])
+    from modules.tg_poster import start_edit
+    current_text = start_edit(call.from_user.id, tg_post_id)
+    await call.answer()
+    await call.message.edit_reply_markup(reply_markup=None)
+    await call.message.answer(
+        f"Текущий текст поста:\n\n{current_text}\n\n"
+        "Отправь отредактированную версию следующим сообщением:"
+    )
+
+
 @router.callback_query(F.data == "tg:status")
 @admin_only
 async def cb_tg_status(call: CallbackQuery):
@@ -426,6 +440,17 @@ async def cb_clear(call: CallbackQuery):
     except Exception as e:
         logger.error(f"Clear failed: {e}")
         await call.message.answer(f"Ошибка при очистке: {e}")
+
+
+# --- TG post edit: catch admin's free text when in edit mode ---
+
+@router.message(F.text & ~F.text.in_({"Pinterest", "Telegram", "ВКонтакте"}))
+@admin_only
+async def handle_edit_text(message: Message):
+    from modules.tg_poster import _WAITING_EDIT, apply_edit
+    if message.from_user.id not in _WAITING_EDIT:
+        return
+    await apply_edit(message.bot, message.from_user.id, message.text)
 
 
 # --- Reply keyboard text handlers ---

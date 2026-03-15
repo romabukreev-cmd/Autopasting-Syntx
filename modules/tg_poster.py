@@ -1,8 +1,10 @@
+import asyncio
 import html
 import logging
 import random
 from datetime import datetime, timezone
 
+import aiohttp
 import aiosqlite
 from aiogram.types import (
     BufferedInputFile, InlineKeyboardButton, InlineKeyboardMarkup,
@@ -26,6 +28,9 @@ client = AsyncOpenAI(api_key=OPENROUTER_API_KEY, base_url=OPENROUTER_BASE_URL)
 
 # Pending posts awaiting admin approval: tg_post_id → {images, main_text, prompt_block, scenario}
 _PENDING: dict[int, dict] = {}
+
+# Admin waiting to send edited text: admin_user_id → tg_post_id
+_WAITING_EDIT: dict[int, int] = {}
 
 TG_CAPTION_LIMIT = 1024  # Telegram photo caption limit
 
@@ -142,8 +147,20 @@ def _combined_caption(main_text: str, prompt_block: str) -> str | None:
     return combined if len(combined) <= TG_CAPTION_LIMIT else None
 
 
+async def _file_accessible(gdrive_file_id: str) -> bool:
+    """Check if file is still on Drive via lh3 HEAD request."""
+    url = f"https://lh3.googleusercontent.com/d/{gdrive_file_id}"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.head(url, allow_redirects=True,
+                                    timeout=aiohttp.ClientTimeout(total=8)) as resp:
+                return resp.headers.get("Content-Type", "").startswith("image/")
+    except Exception:
+        return False
+
+
 async def _pick_images(ref_id: int) -> tuple[int, list[bytes]]:
-    """Pick images by random scenario. Returns (scenario, list_of_image_bytes).
+    """Pick images by random scenario, skipping deleted Drive files.
     Scenario 1: 2 pins (1 NanaBana + 1 SeeDream)
     Scenario 2: 2 clean images
     Scenario 3: 4 clean images
@@ -153,11 +170,16 @@ async def _pick_images(ref_id: int) -> tuple[int, list[bytes]]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT filename, model, type FROM generation_files "
+            "SELECT filename, gdrive_file_id, model, type FROM generation_files "
             "WHERE ref_id = ? ORDER BY id",
             (ref_id,),
         ) as cur:
-            files = [dict(r) for r in await cur.fetchall()]
+            all_files = [dict(r) for r in await cur.fetchall()]
+
+    # Filter to files that still exist on Drive (concurrent checks)
+    checks = await asyncio.gather(*[_file_accessible(f["gdrive_file_id"]) for f in all_files])
+    files = [f for f, ok in zip(all_files, checks) if ok]
+    logger.info(f"ref_id={ref_id}: {len(files)}/{len(all_files)} files accessible on Drive")
 
     clean_files = [f for f in files if f["type"] == "clean"]
     sd_pins = [f for f in files if f["type"] == "pin" and f["model"] == "seedream"]
@@ -167,7 +189,6 @@ async def _pick_images(ref_id: int) -> tuple[int, list[bytes]]:
     scenario = random.choices([1, 2, 3, 4, 5], weights=[20, 20, 20, 20, 20])[0]
 
     if scenario == 1:
-        # 1 NanaBana pin + 1 SeeDream pin
         chosen = []
         if nb_pins: chosen.append(random.choice(nb_pins))
         if sd_pins: chosen.append(random.choice(sd_pins))
@@ -176,10 +197,8 @@ async def _pick_images(ref_id: int) -> tuple[int, list[bytes]]:
     elif scenario == 3:
         chosen = random.sample(clean_files, min(4, len(clean_files)))
     elif scenario == 4:
-        # 1 чистое изображение (без текста)
         chosen = random.sample(clean_files, min(1, len(clean_files)))
     else:
-        # 1 пин (с текстом/overlay)
         chosen = [random.choice(all_pins)] if all_pins else []
 
     images = []
@@ -249,16 +268,31 @@ async def post_tg(bot, tg_post_id: int, ref_id: int, prompt: str, category: str)
         )
         await db.commit()
 
-    # Send preview to admin
-    approve_kb = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="✅ Опубликовать", callback_data=f"tg:approve:{tg_post_id}"),
-        InlineKeyboardButton(text="❌ Отменить", callback_data=f"tg:cancel:{tg_post_id}"),
-    ]])
+    await _send_preview_to_admin(bot, tg_post_id)
+    logger.info(f"TG post {tg_post_id} sent to admin for approval")
 
+
+def _approval_kb(tg_post_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Опубликовать", callback_data=f"tg:approve:{tg_post_id}"),
+            InlineKeyboardButton(text="❌ Отменить", callback_data=f"tg:cancel:{tg_post_id}"),
+        ],
+        [InlineKeyboardButton(text="✏️ Редактировать", callback_data=f"tg:edit:{tg_post_id}")],
+    ])
+
+
+async def _send_preview_to_admin(bot, tg_post_id: int):
+    """Send post preview + approval buttons to admin."""
+    pending = _PENDING.get(tg_post_id)
+    if not pending:
+        return
+    images = pending["images"]
+    main_text = pending["main_text"]
+    prompt_block = pending["prompt_block"]
     await bot.send_message(ADMIN_USER_ID, f"<b>Превью поста #{tg_post_id}</b>", parse_mode="HTML")
     await _send_to_chat(bot, ADMIN_USER_ID, images, main_text, prompt_block)
-    await bot.send_message(ADMIN_USER_ID, "Опубликовать?", reply_markup=approve_kb)
-    logger.info(f"TG post {tg_post_id} sent to admin for approval")
+    await bot.send_message(ADMIN_USER_ID, "Опубликовать?", reply_markup=_approval_kb(tg_post_id))
 
 
 async def publish_approved(bot, tg_post_id: int) -> bool:
@@ -300,3 +334,37 @@ async def cancel_post(bot, tg_post_id: int):
         )
         await db.commit()
     logger.info(f"TG post {tg_post_id} cancelled by admin")
+
+
+def start_edit(admin_user_id: int, tg_post_id: int) -> str:
+    """Mark admin as waiting to send edited text. Returns current editable text."""
+    _WAITING_EDIT[admin_user_id] = tg_post_id
+    pending = _PENDING.get(tg_post_id, {})
+    main_text = pending.get("main_text", "")
+    prompt_block = pending.get("prompt_block", "")
+    combined = _combined_caption(main_text, prompt_block)
+    # Return combined if single-message post, else only the first part (main_text)
+    return combined if combined else main_text
+
+
+async def apply_edit(bot, admin_user_id: int, new_text: str):
+    """Apply edited text from admin and re-send preview."""
+    tg_post_id = _WAITING_EDIT.pop(admin_user_id, None)
+    if tg_post_id is None or tg_post_id not in _PENDING:
+        return
+    pending = _PENDING[tg_post_id]
+    combined = _combined_caption(pending["main_text"], pending["prompt_block"])
+    if combined:
+        # Single-message post: new_text replaces the whole combined caption
+        # Split back: everything after the last \n\n<b>Копируй is prompt_block
+        marker = "\n\n<b>Копируй"
+        idx = new_text.rfind(marker)
+        if idx != -1:
+            pending["main_text"] = new_text[:idx]
+            # prompt_block stays unchanged
+        else:
+            pending["main_text"] = new_text
+    else:
+        # Two-message post: new_text replaces only main_text
+        pending["main_text"] = new_text
+    await _send_preview_to_admin(bot, tg_post_id)
