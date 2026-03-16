@@ -26,6 +26,9 @@ MAKE_PIN_LINK = os.getenv("MAKE_PIN_LINK")  # ссылка на Telegram-кан�
 # Pinterest — один борд для всех постов
 PINTEREST_BOARD_ID = os.getenv("PINTEREST_BOARD_ID", "")
 
+# Категории с image-to-image генерацией (ключевые слова в нижнем регистре)
+IMAGE_TO_IMAGE_KEYWORDS = {"нейрофото", "логотип", "товар"}
+
 # Database
 DB_PATH = "syntx.db"
 

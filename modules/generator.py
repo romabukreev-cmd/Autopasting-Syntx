@@ -12,7 +12,9 @@ from config import (
     DELAY_BETWEEN_GENERATIONS,
     DRIVE_BASE_PATH,
     DRIVE_FOLDER_GENS,
+    DRIVE_FOLDER_REFS,
     GENERATIONS_PER_PROMPT,
+    IMAGE_TO_IMAGE_KEYWORDS,
     IMAGES_PER_DAY_MIN,
     IMAGES_PER_DAY_MAX,
     IMAGES_PER_WEEK,
@@ -34,9 +36,26 @@ def _is_image_only_model(model: str) -> bool:
     return any(model.startswith(p) for p in image_only_prefixes)
 
 
-async def _generate_image(prompt: str, model: str) -> bytes:
-    """Call OpenRouter chat/completions with modalities=image to get image bytes."""
+def _is_image_to_image(category: str) -> bool:
+    """True if category requires reference image passed alongside prompt."""
+    cat_lower = category.lower()
+    return any(kw in cat_lower for kw in IMAGE_TO_IMAGE_KEYWORDS)
+
+
+async def _generate_image(prompt: str, model: str, ref_image: bytes | None = None) -> bytes:
+    """Call OpenRouter chat/completions with modalities=image to get image bytes.
+    If ref_image is provided, it is passed as the first content part (image-to-image).
+    """
     modalities = ["image"] if _is_image_only_model(model) else ["image", "text"]
+
+    if ref_image:
+        b64_ref = base64.b64encode(ref_image).decode()
+        content = [
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_ref}"}},
+            {"type": "text", "text": prompt},
+        ]
+    else:
+        content = prompt
 
     async with httpx.AsyncClient(timeout=300) as http:
         resp = await http.post(
@@ -47,7 +66,7 @@ async def _generate_image(prompt: str, model: str) -> bytes:
             },
             json={
                 "model": model,
-                "messages": [{"role": "user", "content": prompt}],
+                "messages": [{"role": "user", "content": content}],
                 "modalities": modalities,
                 "image_config": {"aspect_ratio": "2:3"},
             },
@@ -64,10 +83,10 @@ async def _generate_image(prompt: str, model: str) -> bytes:
     return base64.b64decode(b64)
 
 
-async def _generate_with_retry(prompt: str, model: str) -> bytes | None:
+async def _generate_with_retry(prompt: str, model: str, ref_image: bytes | None = None) -> bytes | None:
     for attempt in range(MAX_GENERATION_ATTEMPTS):
         try:
-            return await _generate_image(prompt, model)
+            return await _generate_image(prompt, model, ref_image)
         except Exception as e:
             logger.warning(f"Generation attempt {attempt + 1} failed: {e}")
             if attempt < MAX_GENERATION_ATTEMPTS - 1:
@@ -84,6 +103,7 @@ def _build_prompt_queue(refs: list) -> list[dict]:
             queue.append({
                 "ref_id": ref["id"],
                 "category": ref["category"],
+                "ref_filename": ref["filename"],
                 "prompt_index": i,
                 "full": p.get("full", ""),
                 "short": p.get("short", ""),
@@ -118,6 +138,7 @@ async def _get_week_prompts(week: int) -> list[dict]:
                             "gen_id": row["id"],
                             "ref_id": row["reference_id"],
                             "category": ref["category"],
+                            "ref_filename": ref["filename"],
                             "prompt_index": row["prompt_index"],
                             "full": p.get("full", ""),
                             "short": p.get("short", ""),
@@ -158,6 +179,16 @@ async def _process_one(gen_id: int, item: dict, week: int) -> tuple[bool, bool]:
     logger.info(f"gen_{gen_id:04d} ref_id={ref_id} prompt: {item['full']}")
     logger.info(f"gen_{gen_id:04d} short: {item['short']}")
 
+    # Download reference image for image-to-image categories
+    ref_image: bytes | None = None
+    if _is_image_to_image(category):
+        ref_path = f"{DRIVE_BASE_PATH}/{DRIVE_FOLDER_REFS}/{category}/{item['ref_filename']}"
+        try:
+            ref_image = await drive.download_file(ref_path)
+            logger.info(f"gen_{gen_id:04d} image-to-image: loaded ref {item['ref_filename']}")
+        except Exception as e:
+            logger.warning(f"gen_{gen_id:04d} could not load ref image, falling back to text-only: {e}")
+
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "UPDATE generations SET attempt_count = attempt_count + 1 WHERE id = ?", (gen_id,)
@@ -182,7 +213,7 @@ async def _process_one(gen_id: int, item: dict, week: int) -> tuple[bool, bool]:
 
     # --- NanaBanana: GENERATIONS_PER_PROMPT images ---
     for n in range(GENERATIONS_PER_PROMPT):
-        nb_data = await _generate_with_retry(item["full"], MODEL_IMAGE)
+        nb_data = await _generate_with_retry(item["full"], MODEL_IMAGE, ref_image)
         if nb_data:
             fname = f"gen_{gen_id:04d}_{n+1}.jpg"
             clean_path = f"{base_path}/nanobana/{fname}"
@@ -267,7 +298,7 @@ async def run_retry(bot, chat_id: int):
         async with aiosqlite.connect(DB_PATH) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
-                "SELECT g.id, g.reference_id, g.prompt_index, g.week_number, r.category, r.prompts "
+                "SELECT g.id, g.reference_id, g.prompt_index, g.week_number, r.category, r.filename, r.prompts "
                 "FROM generations g JOIN refs r ON g.reference_id = r.id "
                 "WHERE g.status = 'failed'"
             ) as cur:
@@ -291,6 +322,7 @@ async def run_retry(bot, chat_id: int):
                 "gen_id": row["id"],
                 "ref_id": row["reference_id"],
                 "category": row["category"],
+                "ref_filename": row["filename"],
                 "full": p.get("full", ""),
                 "short": p.get("short", ""),
             }
