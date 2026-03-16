@@ -234,7 +234,13 @@ async def _process_one(gen_id: int, item: dict, week: int) -> bool:
         raw_prompt = item.get("full", "")
         # Substitute a random phrase from Sheets instead of "YOUR TEXT"
         phrase = await _pick_3d_phrase()
-        gen_prompt = re.sub(r"YOUR TEXT", phrase, raw_prompt, flags=re.IGNORECASE)
+        adapted = re.sub(r"YOUR\s+TEXT", phrase, raw_prompt, flags=re.IGNORECASE)
+        if adapted == raw_prompt:
+            # YOUR TEXT not found — prepend the phrase
+            gen_prompt = f"{phrase}. {raw_prompt}"
+            logger.warning(f"gen_{gen_id:04d} 3D prompt had no YOUR TEXT placeholder, prepended phrase")
+        else:
+            gen_prompt = adapted
         overlay_text = "ТВОЙ ТЕКСТ"
     else:
         gen_prompt = item.get("full", "")
