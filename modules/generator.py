@@ -189,7 +189,7 @@ async def _get_week_prompts(week: int) -> list[dict]:
                         result.append(item)
             return result
 
-        async with db.execute("SELECT id, category, prompts FROM refs ORDER BY id") as cur:
+        async with db.execute("SELECT id, category, filename, prompts FROM refs ORDER BY id") as cur:
             all_refs = [dict(r) for r in await cur.fetchall()]
 
     prompt_queue = _build_prompt_queue(all_refs)
