@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import logging
+import random
 from datetime import date
 
 import aiosqlite
@@ -12,9 +13,9 @@ from config import (
     DELAY_BETWEEN_GENERATIONS,
     DRIVE_BASE_PATH,
     DRIVE_FOLDER_GENS,
-    DRIVE_FOLDER_REFS,
+    DRIVE_FOLDER_LOGOS,
+    DRIVE_FOLDER_USER_PHOTOS,
     GENERATIONS_PER_PROMPT,
-    IMAGE_TO_IMAGE_KEYWORDS,
     IMAGES_PER_DAY_MIN,
     IMAGES_PER_DAY_MAX,
     IMAGES_PER_WEEK,
@@ -36,10 +37,39 @@ def _is_image_only_model(model: str) -> bool:
     return any(model.startswith(p) for p in image_only_prefixes)
 
 
-def _is_image_to_image(category: str) -> bool:
-    """True if category requires reference image passed alongside prompt."""
-    cat_lower = category.lower()
-    return any(kw in cat_lower for kw in IMAGE_TO_IMAGE_KEYWORDS)
+def _is_neurophoto(cat: str) -> bool:
+    return "нейрофото" in cat.lower()
+
+
+def _is_logo(cat: str) -> bool:
+    return "логотип" in cat.lower()
+
+
+def _is_3d_text(cat: str) -> bool:
+    c = cat.lower()
+    return "3d" in c or "3д" in c
+
+
+async def _fetch_random_images(folder_path: str, n: int) -> list[bytes]:
+    """Download n unique random images from a Drive folder. Returns up to n items."""
+    try:
+        files = await drive.list_files(folder_path)
+    except Exception as e:
+        logger.warning(f"Could not list {folder_path}: {e}")
+        return []
+    images = [f for f in files if f["name"].lower().endswith((".jpg", ".jpeg", ".png", ".webp"))]
+    if not images:
+        return []
+    random.shuffle(images)
+    selected = images[:n]
+    result = []
+    for f in selected:
+        try:
+            data = await drive.download_file(f"{folder_path}/{f['name']}")
+            result.append(data)
+        except Exception as e:
+            logger.warning(f"Failed to download {f['name']} from {folder_path}: {e}")
+    return result
 
 
 async def _generate_image(prompt: str, model: str, ref_image: bytes | None = None) -> bytes:
@@ -94,20 +124,26 @@ async def _generate_with_retry(prompt: str, model: str, ref_image: bytes | None 
     return None
 
 
+def _item_from_prompt(ref_id: int, category: str, ref_filename: str, prompt_index: int, p: dict) -> dict:
+    return {
+        "ref_id": ref_id,
+        "category": category,
+        "ref_filename": ref_filename,
+        "prompt_index": prompt_index,
+        "full": p.get("full", ""),
+        "full_glasses": p.get("full_glasses", ""),
+        "full_no_glasses": p.get("full_no_glasses", ""),
+        "short": p.get("short", ""),
+    }
+
+
 def _build_prompt_queue(refs: list) -> list[dict]:
     """Linear order — 1 prompt per ref, no interleaving."""
     queue = []
     for ref in refs:
         prompts = json.loads(ref["prompts"])
         for i, p in enumerate(prompts):
-            queue.append({
-                "ref_id": ref["id"],
-                "category": ref["category"],
-                "ref_filename": ref["filename"],
-                "prompt_index": i,
-                "full": p.get("full", ""),
-                "short": p.get("short", ""),
-            })
+            queue.append(_item_from_prompt(ref["id"], ref["category"], ref["filename"], i, p))
     return queue
 
 
@@ -127,22 +163,18 @@ async def _get_week_prompts(week: int) -> list[dict]:
             result = []
             for row in existing:
                 async with db.execute(
-                    "SELECT id, category, prompts FROM refs WHERE id = ?", (row["reference_id"],)
+                    "SELECT id, category, filename, prompts FROM refs WHERE id = ?", (row["reference_id"],)
                 ) as cur2:
                     ref = await cur2.fetchone()
                 if ref:
                     prompts = json.loads(ref["prompts"])
                     if row["prompt_index"] < len(prompts):
                         p = prompts[row["prompt_index"]]
-                        result.append({
-                            "gen_id": row["id"],
-                            "ref_id": row["reference_id"],
-                            "category": ref["category"],
-                            "ref_filename": ref["filename"],
-                            "prompt_index": row["prompt_index"],
-                            "full": p.get("full", ""),
-                            "short": p.get("short", ""),
-                        })
+                        item = _item_from_prompt(
+                            row["reference_id"], ref["category"], ref["filename"], row["prompt_index"], p
+                        )
+                        item["gen_id"] = row["id"]
+                        result.append(item)
             return result
 
         async with db.execute("SELECT id, category, prompts FROM refs ORDER BY id") as cur:
@@ -166,28 +198,51 @@ async def _get_week_prompts(week: int) -> list[dict]:
     return await _get_week_prompts(week)
 
 
-async def _process_one(gen_id: int, item: dict, week: int) -> tuple[bool, bool]:
+async def _process_one(gen_id: int, item: dict, week: int) -> bool:
     """
-    Generate GENERATIONS_PER_PROMPT images with each model, apply overlay, upload to Drive.
+    Generate GENERATIONS_PER_PROMPT images, apply overlay, upload to Drive.
     All files recorded in generation_files table.
-    Structure: База генераций / week_{week} / {category} / seedream|nanobana|*_pin /
+    Structure: База генераций / week_{week} / {category} / nanobana | nanobana_pin /
+
+    Format logic:
+    - Нейрофото: i2i with user photo (different per gen), full_glasses for gen, full_no_glasses for overlay
+    - Логотипы: i2i with logo (different per gen), full for gen and overlay
+    - 3D Текст: text-only, "ТВОЙ ТЕКСТ" on overlay
+    - Others: text-only
     """
     ref_id = item["ref_id"]
     category = item["category"]
     base_path = f"{DRIVE_BASE_PATH}/{DRIVE_FOLDER_GENS}/week_{week}/{category}"
 
-    logger.info(f"gen_{gen_id:04d} ref_id={ref_id} prompt: {item['full']}")
-    logger.info(f"gen_{gen_id:04d} short: {item['short']}")
+    # Determine prompt for generation and text for overlay
+    if _is_neurophoto(category):
+        gen_prompt = item.get("full_glasses") or item.get("full", "")
+        overlay_text = item.get("full_no_glasses") or item.get("full", "")
+    elif _is_3d_text(category):
+        gen_prompt = item.get("full", "")
+        overlay_text = "ТВОЙ ТЕКСТ"
+    else:
+        gen_prompt = item.get("full", "")
+        overlay_text = item.get("full", "")
 
-    # Download reference image for image-to-image categories
-    ref_image: bytes | None = None
-    if _is_image_to_image(category):
-        ref_path = f"{DRIVE_BASE_PATH}/{DRIVE_FOLDER_REFS}/{category}/{item['ref_filename']}"
-        try:
-            ref_image = await drive.download_file(ref_path)
-            logger.info(f"gen_{gen_id:04d} image-to-image: loaded ref {item['ref_filename']}")
-        except Exception as e:
-            logger.warning(f"gen_{gen_id:04d} could not load ref image, falling back to text-only: {e}")
+    logger.info(f"gen_{gen_id:04d} [{category}] prompt: {gen_prompt[:100]}")
+
+    # Pre-fetch reference images for i2i categories
+    ref_images: list[bytes | None] = [None] * GENERATIONS_PER_PROMPT
+    if _is_neurophoto(category):
+        photos_path = f"{DRIVE_BASE_PATH}/{DRIVE_FOLDER_USER_PHOTOS}"
+        photos = await _fetch_random_images(photos_path, GENERATIONS_PER_PROMPT)
+        for i, p in enumerate(photos):
+            ref_images[i] = p
+        if not photos:
+            logger.warning(f"gen_{gen_id:04d} No user photos found in {photos_path}, generating text-only")
+    elif _is_logo(category):
+        logos_path = f"{DRIVE_BASE_PATH}/{DRIVE_FOLDER_LOGOS}"
+        logos = await _fetch_random_images(logos_path, GENERATIONS_PER_PROMPT)
+        for i, lg in enumerate(logos):
+            ref_images[i] = lg
+        if not logos:
+            logger.warning(f"gen_{gen_id:04d} No logos found in {logos_path}, generating text-only")
 
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
@@ -197,8 +252,7 @@ async def _process_one(gen_id: int, item: dict, week: int) -> tuple[bool, bool]:
 
     ok = 0
 
-    async def _save_file(data: bytes, path: str, model: str, ftype: str, fname: str):
-        """Upload file and record in generation_files."""
+    async def _save_file(data: bytes, path: str, model: str, ftype: str):
         file_id = await drive.upload_file(data, path)
         if ftype == "pin":
             await drive.make_public(path)
@@ -206,21 +260,22 @@ async def _process_one(gen_id: int, item: dict, week: int) -> tuple[bool, bool]:
             await db.execute(
                 "INSERT INTO generation_files (generation_id, ref_id, model, type, gdrive_file_id, filename) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
-                (gen_id, ref_id, model, ftype, file_id, fname),
+                (gen_id, ref_id, model, ftype, file_id, path),
             )
             await db.commit()
         return file_id
 
     # --- NanaBanana: GENERATIONS_PER_PROMPT images ---
     for n in range(GENERATIONS_PER_PROMPT):
-        nb_data = await _generate_with_retry(item["full"], MODEL_IMAGE, ref_image)
+        ref_img = ref_images[n]
+        nb_data = await _generate_with_retry(gen_prompt, MODEL_IMAGE, ref_img)
         if nb_data:
             fname = f"gen_{gen_id:04d}_{n+1}.jpg"
             clean_path = f"{base_path}/nanobana/{fname}"
             pin_path = f"{base_path}/nanobana_pin/{fname}"
-            await _save_file(nb_data, clean_path, "nanobana", "clean", clean_path)
-            nb_pin = overlay.apply_overlay(nb_data, item["full"], "nanobana")
-            await _save_file(nb_pin, pin_path, "nanobana", "pin", pin_path)
+            await _save_file(nb_data, clean_path, "nanobana", "clean")
+            nb_pin = overlay.apply_overlay(nb_data, overlay_text, "nanobana")
+            await _save_file(nb_pin, pin_path, "nanobana", "pin")
             ok += 1
             logger.info(f"gen_{gen_id:04d} NanaBana {n+1}/{GENERATIONS_PER_PROMPT}: ok")
         else:
@@ -318,14 +373,10 @@ async def run_retry(bot, chat_id: int):
             if row["prompt_index"] >= len(prompts):
                 continue
             p = prompts[row["prompt_index"]]
-            item = {
-                "gen_id": row["id"],
-                "ref_id": row["reference_id"],
-                "category": row["category"],
-                "ref_filename": row["filename"],
-                "full": p.get("full", ""),
-                "short": p.get("short", ""),
-            }
+            item = _item_from_prompt(
+                row["reference_id"], row["category"], row["filename"], row["prompt_index"], p
+            )
+            item["gen_id"] = row["id"]
 
             async with aiosqlite.connect(DB_PATH) as db:
                 await db.execute(

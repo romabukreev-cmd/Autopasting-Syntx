@@ -24,7 +24,24 @@ logger = logging.getLogger(__name__)
 
 client = AsyncOpenAI(api_key=OPENROUTER_API_KEY, base_url=OPENROUTER_BASE_URL, timeout=180.0)
 
-ANALYZE_PROMPT = """Your only task: read the generation prompt text printed on this image.
+# ── Category helpers ──────────────────────────────────────────────────────────
+
+def _is_neurophoto(cat: str) -> bool:
+    return "нейрофото" in cat.lower()
+
+def _is_logo(cat: str) -> bool:
+    return "логотип" in cat.lower()
+
+def _is_3d_no_prompt(cat: str) -> bool:
+    return "без промпта" in cat.lower()
+
+def _is_3d_with_prompt(cat: str) -> bool:
+    c = cat.lower()
+    return ("3d" in c or "3д" in c) and "без" not in c
+
+# ── System prompts ─────────────────────────────────────────────────────────────
+
+_PROMPT_OCR = """Your only task: read the generation prompt text printed on this image.
 
 The prompt is usually located at the bottom of the image in a text block.
 
@@ -35,29 +52,178 @@ Rules:
 Return JSON only, no markdown fences:
 {"base_prompt": "<exact text from image>"}"""
 
+_PROMPT_ADAPT_NEUROPHOTO = """You are adapting an AI image generation prompt for face-swap / image-to-image portrait generation.
 
-async def _analyze_image(image_data: bytes) -> dict:
+The user's reference photo will be attached to the generation. The user wears glasses.
+
+Your tasks:
+1. Remove ALL descriptions of a specific person's appearance: gender words (man, woman, male, female, boy, girl), hair color/style, beard, age, facial features, skin tone, etc.
+2. Keep all style, lighting, background, clothing, and art-direction instructions intact.
+3. Ensure the prompt references the person from the attached photo. If no such phrase exists, add it naturally (e.g. "of the person from the input photo", "based on the reference portrait").
+4. Produce TWO versions:
+   - "with_glasses": includes a natural mention of glasses (e.g. "wearing glasses", "with glasses")
+   - "no_glasses": identical but without any mention of glasses
+
+The output language must match the input prompt language.
+Return JSON only, no markdown:
+{"with_glasses": "<prompt with glasses>", "no_glasses": "<prompt without glasses>"}"""
+
+_PROMPT_ADAPT_LOGO = """You are adapting an AI image generation prompt for logo design generation.
+
+The user will attach a specific logo image to the generation request.
+
+Your tasks:
+1. Remove any mentions of specific company names, brand names, or specific logos (e.g. "Nike logo", "Apple", "McDonald's golden arches", etc.)
+2. Replace those mentions with generic phrases like "the logo from the reference image", "the provided logo", or "this logo".
+3. Keep all style, color, material, lighting, and composition instructions completely intact.
+
+The output language must match the input prompt language.
+Return JSON only, no markdown:
+{"adapted": "<universalized prompt>"}"""
+
+_PROMPT_ANALYZE_3D_IMAGE = """You are analyzing a 3D text effect image to write an AI generation prompt.
+
+The image shows stylized 3D text with a specific visual effect. Your task: write a detailed generation prompt that reproduces this text effect style.
+
+Requirements for the prompt you write:
+- Describe the 3D text style, material, texture, lighting, shadows, and effects in detail.
+- Include exactly this phrase: "plain solid-color background"
+- Include exactly this phrase: "top 20% and bottom 20% of the image must remain empty"
+- Do NOT mention any specific letters, words, or phrases — use "YOUR TEXT" as a placeholder instead.
+- Write the prompt in English.
+
+Return JSON only, no markdown:
+{"prompt": "<generation prompt>"}"""
+
+_PROMPT_ADAPT_3D_WITH_PROMPT = """You are adapting a 3D text generation prompt.
+
+Your tasks:
+1. Replace any specific word, phrase, or text that appears inside the 3D letters with "YOUR TEXT".
+2. Add the following technical requirements at the end if they are not already present:
+   - "Plain solid-color background."
+   - "Top 20% and bottom 20% of the image must remain empty."
+3. Keep all style, material, lighting, and effect instructions intact.
+
+The output language must match the input prompt language.
+Return JSON only, no markdown:
+{"full": "<adapted prompt>"}"""
+
+# ── Analysis helpers ───────────────────────────────────────────────────────────
+
+async def _ocr(image_data: bytes) -> str:
+    """Extract prompt text from image via GPT-4o OCR."""
     b64 = base64.b64encode(image_data).decode()
     resp = await client.chat.completions.create(
         model=MODEL_ANALYZER,
-        messages=[{
-            "role": "user",
-            "content": [
-                {"type": "text", "text": ANALYZE_PROMPT},
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-            ],
-        }],
+        messages=[{"role": "user", "content": [
+            {"type": "text", "text": _PROMPT_OCR},
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+        ]}],
         response_format={"type": "json_object"},
         max_tokens=4000,
     )
+    return json.loads(resp.choices[0].message.content).get("base_prompt", "")
+
+
+async def _adapt_neurophoto(base_prompt: str) -> dict:
+    resp = await client.chat.completions.create(
+        model=MODEL_ANALYZER,
+        messages=[{"role": "user", "content": [
+            {"type": "text", "text": _PROMPT_ADAPT_NEUROPHOTO},
+            {"type": "text", "text": f"Prompt to adapt:\n{base_prompt}"},
+        ]}],
+        response_format={"type": "json_object"},
+        max_tokens=2000,
+    )
     return json.loads(resp.choices[0].message.content)
 
+
+async def _adapt_logo(base_prompt: str) -> dict:
+    resp = await client.chat.completions.create(
+        model=MODEL_ANALYZER,
+        messages=[{"role": "user", "content": [
+            {"type": "text", "text": _PROMPT_ADAPT_LOGO},
+            {"type": "text", "text": f"Prompt to adapt:\n{base_prompt}"},
+        ]}],
+        response_format={"type": "json_object"},
+        max_tokens=2000,
+    )
+    return json.loads(resp.choices[0].message.content)
+
+
+async def _analyze_3d_image(image_data: bytes) -> dict:
+    """GPT-4o analyzes 3D text image and generates a prompt (no text on image)."""
+    b64 = base64.b64encode(image_data).decode()
+    resp = await client.chat.completions.create(
+        model=MODEL_ANALYZER,
+        messages=[{"role": "user", "content": [
+            {"type": "text", "text": _PROMPT_ANALYZE_3D_IMAGE},
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+        ]}],
+        response_format={"type": "json_object"},
+        max_tokens=2000,
+    )
+    return json.loads(resp.choices[0].message.content)
+
+
+async def _adapt_3d_prompt(base_prompt: str) -> dict:
+    resp = await client.chat.completions.create(
+        model=MODEL_ANALYZER,
+        messages=[{"role": "user", "content": [
+            {"type": "text", "text": _PROMPT_ADAPT_3D_WITH_PROMPT},
+            {"type": "text", "text": f"Prompt to adapt:\n{base_prompt}"},
+        ]}],
+        response_format={"type": "json_object"},
+        max_tokens=2000,
+    )
+    return json.loads(resp.choices[0].message.content)
+
+
+async def _analyze_ref(image_data: bytes, category: str) -> dict:
+    """Returns a prompts dict based on the category type."""
+    if _is_neurophoto(category):
+        base = await _ocr(image_data)
+        adapted = await _adapt_neurophoto(base)
+        return {
+            "full_glasses": adapted.get("with_glasses", base),
+            "full_no_glasses": adapted.get("no_glasses", base),
+        }
+
+    elif _is_logo(category):
+        base = await _ocr(image_data)
+        adapted = await _adapt_logo(base)
+        return {
+            "full": adapted.get("adapted", base),
+        }
+
+    elif _is_3d_no_prompt(category):
+        result = await _analyze_3d_image(image_data)
+        return {
+            "full": result.get("prompt", ""),
+            "short": "ТВОЙ ТЕКСТ",
+        }
+
+    elif _is_3d_with_prompt(category):
+        base = await _ocr(image_data)
+        adapted = await _adapt_3d_prompt(base)
+        return {
+            "full": adapted.get("full", base),
+            "short": "ТВОЙ ТЕКСТ",
+        }
+
+    else:
+        # Fallback: plain OCR
+        base = await _ocr(image_data)
+        return {"full": base}
+
+
+# ── Main entry point ───────────────────────────────────────────────────────────
 
 async def run_analysis(bot, chat_id: int):
     try:
         refs_base = f"{DRIVE_BASE_PATH}/{DRIVE_FOLDER_REFS}"
 
-        # List category subfolders
+        # List top-level category subfolders
         categories = await drive.list_dirs(refs_base)
         if not categories:
             await bot.send_message(chat_id, f"Папка '{refs_base}' пуста или не найдена на Google Drive.")
@@ -70,17 +236,33 @@ async def run_analysis(bot, chat_id: int):
             async with db.execute("SELECT gdrive_file_id, md5 FROM refs") as cur:
                 existing = {row["gdrive_file_id"]: row["md5"] async for row in cur}
 
-        # Collect all image files
+        # Collect all image files (two-level: supports sub-folders like "3D Текст/С промптом")
         all_refs = []
         for cat in categories:
             cat_path = f"{refs_base}/{cat['name']}"
-            files = await drive.list_files(cat_path)
-            images = [f for f in files if "image" in f.get("mime_type", "") or
-                      f["name"].lower().endswith((".jpg", ".jpeg", ".png", ".webp"))]
-            for img in images:
-                img["category"] = cat["name"]
-                img["path"] = f"{cat_path}/{img['name']}"
-            all_refs.extend(images)
+            subdirs = await drive.list_dirs(cat_path)
+
+            if subdirs:
+                # Category has sub-folders (e.g. "3D Текст" → "С промптом" / "Без промпта")
+                for sub in subdirs:
+                    sub_path = f"{cat_path}/{sub['name']}"
+                    files = await drive.list_files(sub_path)
+                    images = [f for f in files if
+                              "image" in f.get("mime_type", "") or
+                              f["name"].lower().endswith((".jpg", ".jpeg", ".png", ".webp"))]
+                    for img in images:
+                        img["category"] = f"{cat['name']}/{sub['name']}"
+                        img["path"] = f"{sub_path}/{img['name']}"
+                    all_refs.extend(images)
+            else:
+                files = await drive.list_files(cat_path)
+                images = [f for f in files if
+                          "image" in f.get("mime_type", "") or
+                          f["name"].lower().endswith((".jpg", ".jpeg", ".png", ".webp"))]
+                for img in images:
+                    img["category"] = cat["name"]
+                    img["path"] = f"{cat_path}/{img['name']}"
+                all_refs.extend(images)
 
         total = len(all_refs)
         if total == 0:
@@ -119,15 +301,12 @@ async def run_analysis(bot, chat_id: int):
                 data = await drive.download_file(ref["path"])
                 md5 = await drive.compute_md5(data)
 
-                result = await _analyze_image(data)
-                base_prompt = result.get("base_prompt", "")
+                prompt_dict = await _analyze_ref(data, ref["category"])
+                prompts_json = json.dumps([prompt_dict], ensure_ascii=False)
 
-                logger.info(f"Analyzed '{ref['name']}': {base_prompt[:100]}...")
+                logger.info(f"Analyzed '{ref['name']}' [{ref['category']}]: {str(prompt_dict)[:120]}...")
 
-                variants = [{"full": base_prompt}]
-                prompts_json = json.dumps(variants, ensure_ascii=False)
                 today = date.today().isoformat()
-
                 async with aiosqlite.connect(DB_PATH) as db:
                     await db.execute("DELETE FROM refs WHERE gdrive_file_id = ?", (ref["id"],))
                     await db.execute(

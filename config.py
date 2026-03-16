@@ -26,9 +26,6 @@ MAKE_PIN_LINK = os.getenv("MAKE_PIN_LINK")  # ссылка на Telegram-кан�
 # Pinterest — один борд для всех постов
 PINTEREST_BOARD_ID = os.getenv("PINTEREST_BOARD_ID", "")
 
-# Категории с image-to-image генерацией (ключевые слова в нижнем регистре)
-IMAGE_TO_IMAGE_KEYWORDS = {"нейрофото", "логотип", "товар"}
-
 # Database
 DB_PATH = "syntx.db"
 
@@ -36,6 +33,8 @@ DB_PATH = "syntx.db"
 DRIVE_BASE_PATH = os.getenv("DRIVE_BASE_PATH", "PROJECTS/Автопостинг Syntx")
 DRIVE_FOLDER_REFS = "Референс"
 DRIVE_FOLDER_GENS = "База генераций"
+DRIVE_FOLDER_USER_PHOTOS = "Мои фото"   # папка с твоими фотками для нейрофото
+DRIVE_FOLDER_LOGOS = "Лого"             # папка с логотипами для генераций лого
 
 # Generation
 IMAGES_PER_WEEK = 100
