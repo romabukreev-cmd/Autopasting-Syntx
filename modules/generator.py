@@ -17,8 +17,7 @@ from config import (
     IMAGES_PER_DAY_MAX,
     IMAGES_PER_WEEK,
     MAX_GENERATION_ATTEMPTS,
-    MODEL_IMAGE_1,
-    MODEL_IMAGE_2,
+    MODEL_IMAGE,
     OPENROUTER_API_KEY,
     OPENROUTER_BASE_URL,
     RETRY_DELAY,
@@ -165,8 +164,7 @@ async def _process_one(gen_id: int, item: dict, week: int) -> tuple[bool, bool]:
         )
         await db.commit()
 
-    sd_ok = 0
-    nb_ok = 0
+    ok = 0
 
     async def _save_file(data: bytes, path: str, model: str, ftype: str, fname: str):
         """Upload file and record in generation_files."""
@@ -182,25 +180,9 @@ async def _process_one(gen_id: int, item: dict, week: int) -> tuple[bool, bool]:
             await db.commit()
         return file_id
 
-    # --- SeeDream: GENERATIONS_PER_PROMPT images ---
+    # --- NanaBanana: GENERATIONS_PER_PROMPT images ---
     for n in range(GENERATIONS_PER_PROMPT):
-        sd_data = await _generate_with_retry(item["full"], MODEL_IMAGE_1)
-        if sd_data:
-            fname = f"gen_{gen_id:04d}_{n+1}.jpg"
-            clean_path = f"{base_path}/seedream/{fname}"
-            pin_path = f"{base_path}/seedream_pin/{fname}"
-            await _save_file(sd_data, clean_path, "seedream", "clean", clean_path)
-            sd_pin = overlay.apply_overlay(sd_data, item["full"], "seedream")
-            await _save_file(sd_pin, pin_path, "seedream", "pin", pin_path)
-            sd_ok += 1
-            logger.info(f"gen_{gen_id:04d} SeeDream {n+1}/{GENERATIONS_PER_PROMPT}: ok")
-        else:
-            logger.warning(f"gen_{gen_id:04d} SeeDream {n+1}/{GENERATIONS_PER_PROMPT}: failed")
-        await asyncio.sleep(DELAY_BETWEEN_GENERATIONS)
-
-    # --- NanaBana: GENERATIONS_PER_PROMPT images ---
-    for n in range(GENERATIONS_PER_PROMPT):
-        nb_data = await _generate_with_retry(item["full"], MODEL_IMAGE_2)
+        nb_data = await _generate_with_retry(item["full"], MODEL_IMAGE)
         if nb_data:
             fname = f"gen_{gen_id:04d}_{n+1}.jpg"
             clean_path = f"{base_path}/nanobana/{fname}"
@@ -208,18 +190,18 @@ async def _process_one(gen_id: int, item: dict, week: int) -> tuple[bool, bool]:
             await _save_file(nb_data, clean_path, "nanobana", "clean", clean_path)
             nb_pin = overlay.apply_overlay(nb_data, item["full"], "nanobana")
             await _save_file(nb_pin, pin_path, "nanobana", "pin", pin_path)
-            nb_ok += 1
+            ok += 1
             logger.info(f"gen_{gen_id:04d} NanaBana {n+1}/{GENERATIONS_PER_PROMPT}: ok")
         else:
             logger.warning(f"gen_{gen_id:04d} NanaBana {n+1}/{GENERATIONS_PER_PROMPT}: failed")
         await asyncio.sleep(DELAY_BETWEEN_GENERATIONS)
 
     async with aiosqlite.connect(DB_PATH) as db:
-        status = "success" if (sd_ok > 0 or nb_ok > 0) else "failed"
+        status = "success" if ok > 0 else "failed"
         await db.execute("UPDATE generations SET status = ? WHERE id = ?", (status, gen_id))
         await db.commit()
 
-    return sd_ok > 0, nb_ok > 0
+    return ok > 0
 
 
 async def run_generation(bot, chat_id: int, week: int):
@@ -231,7 +213,6 @@ async def run_generation(bot, chat_id: int, week: int):
             return
 
         total = len(items)
-        sd_ok = 0
         nb_ok = 0
         failed = 0
         progress_msg = await bot.send_message(chat_id, f"Генерация: 0/{total}")
@@ -241,17 +222,15 @@ async def run_generation(bot, chat_id: int, week: int):
             if not gen_id:
                 continue
 
-            ok_sd, ok_nb = await _process_one(gen_id, item, week)
-            if ok_sd:
-                sd_ok += 1
-            if ok_nb:
+            ok = await _process_one(gen_id, item, week)
+            if ok:
                 nb_ok += 1
-            if not ok_sd and not ok_nb:
+            else:
                 failed += 1
 
             if (i + 1) % 1 == 0 or i + 1 == total:
                 await progress_msg.edit_text(
-                    f"Генерация: {i + 1}/{total} | SeeDream: {sd_ok * GENERATIONS_PER_PROMPT} | NanaBana: {nb_ok * GENERATIONS_PER_PROMPT}"
+                    f"Генерация: {i + 1}/{total} | NanaBana: {nb_ok * GENERATIONS_PER_PROMPT}"
                 )
 
             await asyncio.sleep(DELAY_BETWEEN_GENERATIONS)
@@ -259,13 +238,12 @@ async def run_generation(bot, chat_id: int, week: int):
         status = "done" if failed == 0 else "partial"
         await set_state(generation_status=status)
 
-        total_images = (sd_ok + nb_ok) * GENERATIONS_PER_PROMPT
+        total_images = nb_ok * GENERATIONS_PER_PROMPT
         avg_per_day = (IMAGES_PER_DAY_MIN + IMAGES_PER_DAY_MAX) / 2
         days = total_images / avg_per_day if avg_per_day else 0
         weeks = days / 7
         text = (
             f"Генерация завершена.\n"
-            f"SeeDream: {sd_ok * GENERATIONS_PER_PROMPT}/{total * GENERATIONS_PER_PROMPT} ✓\n"
             f"NanaBana: {nb_ok * GENERATIONS_PER_PROMPT}/{total * GENERATIONS_PER_PROMPT} ✓\n"
             f"Итого изображений: {total_images}\n"
             f"Хватит на: ~{days:.1f} дн. / {weeks:.1f} нед. ({IMAGES_PER_DAY_MIN}-{IMAGES_PER_DAY_MAX} пинов/день)\n"
@@ -302,7 +280,6 @@ async def run_retry(bot, chat_id: int):
 
         total = len(failed_rows)
         progress_msg = await bot.send_message(chat_id, f"Повтор: 0/{total}")
-        sd_ok = 0
         nb_ok = 0
 
         for i, row in enumerate(failed_rows):
@@ -324,24 +301,21 @@ async def run_retry(bot, chat_id: int):
                 )
                 await db.commit()
 
-            ok_sd, ok_nb = await _process_one(row["id"], item, row["week_number"])
-            if ok_sd:
-                sd_ok += 1
-            if ok_nb:
+            ok = await _process_one(row["id"], item, row["week_number"])
+            if ok:
                 nb_ok += 1
 
             if (i + 1) % 1 == 0 or i + 1 == total:
                 await progress_msg.edit_text(
-                    f"Повтор: {i + 1}/{total} | SeeDream: {sd_ok} | NanaBana: {nb_ok}"
+                    f"Повтор: {i + 1}/{total} | NanaBana: {nb_ok}"
                 )
 
             await asyncio.sleep(DELAY_BETWEEN_GENERATIONS)
 
-        any_success = sd_ok + nb_ok
-        await set_state(generation_status="partial" if any_success < total * 2 else "done")
+        await set_state(generation_status="partial" if nb_ok < total else "done")
         await bot.send_message(
             chat_id,
-            f"Повторная генерация завершена.\nSeeDream: {sd_ok}/{total} ✓\nNanaBana: {nb_ok}/{total} ✓"
+            f"Повторная генерация завершена.\nNanaBana: {nb_ok}/{total} ✓"
         )
 
     except Exception as e:

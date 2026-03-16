@@ -182,24 +182,18 @@ async def _pick_images(ref_id: int) -> tuple[int, list[bytes]]:
     logger.info(f"ref_id={ref_id}: {len(files)}/{len(all_files)} files accessible on Drive")
 
     clean_files = [f for f in files if f["type"] == "clean"]
-    sd_pins = [f for f in files if f["type"] == "pin" and f["model"] == "seedream"]
     nb_pins = [f for f in files if f["type"] == "pin" and f["model"] == "nanobana"]
-    all_pins = sd_pins + nb_pins
 
-    scenario = random.choices([1, 2, 3, 4, 5], weights=[20, 20, 20, 20, 20])[0]
+    scenario = random.choices([1, 2, 3, 4], weights=[25, 25, 25, 25])[0]
 
     if scenario == 1:
-        chosen = []
-        if nb_pins: chosen.append(random.choice(nb_pins))
-        if sd_pins: chosen.append(random.choice(sd_pins))
-    elif scenario == 2:
         chosen = random.sample(clean_files, min(2, len(clean_files)))
-    elif scenario == 3:
+    elif scenario == 2:
         chosen = random.sample(clean_files, min(4, len(clean_files)))
-    elif scenario == 4:
+    elif scenario == 3:
         chosen = random.sample(clean_files, min(1, len(clean_files)))
     else:
-        chosen = [random.choice(all_pins)] if all_pins else []
+        chosen = [random.choice(nb_pins)] if nb_pins else random.sample(clean_files, min(1, len(clean_files)))
 
     images = []
     for f in chosen:

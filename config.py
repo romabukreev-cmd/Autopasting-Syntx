@@ -13,8 +13,7 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 # Models
 MODEL_ANALYZER = "openai/gpt-4o"
-MODEL_IMAGE_1 = "bytedance-seed/seedream-4.5"
-MODEL_IMAGE_2 = "google/gemini-3.1-flash-image-preview"
+MODEL_IMAGE = "google/gemini-3.1-flash-image-preview"  # NanaBanana 2
 
 # Google Sheets (публичная ссылка — Sheet должен быть "Все со ссылкой могут просматривать")
 # ID из URL таблицы: docs.google.com/spreadsheets/d/{GSHEETS_ID}/...

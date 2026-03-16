@@ -28,18 +28,6 @@ class OverlayConfig:
     prompt_gap: int        # gap between /промпт label and prompt text (px)
 
 
-SEEDREAM_CONFIG = OverlayConfig(
-    model_label="SEEDREAM",
-    tg_handle="TG: @roman_s_neuro",
-    design_width=1664,
-    margin=50,
-    gradient_height=650,
-    font_size_title=150,
-    font_size_prompt=30,
-    font_size_tg=40,
-    prompt_gap=30,
-)
-
 NANOBANA_CONFIG = OverlayConfig(
     model_label="NANO\nBANANA",
     tg_handle="TG: @roman_s_neuro",
@@ -53,7 +41,6 @@ NANOBANA_CONFIG = OverlayConfig(
 )
 
 _CONFIGS = {
-    "seedream": SEEDREAM_CONFIG,
     "nanobana": NANOBANA_CONFIG,
 }
 
