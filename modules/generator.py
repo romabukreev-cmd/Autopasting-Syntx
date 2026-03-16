@@ -3,6 +3,7 @@ import base64
 import json
 import logging
 import random
+import re
 from datetime import date
 
 import aiosqlite
@@ -26,7 +27,7 @@ from config import (
     RETRY_DELAY,
 )
 from database import set_state
-from modules import drive, overlay
+from modules import drive, overlay, sheets
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +71,17 @@ async def _fetch_random_images(folder_path: str, n: int) -> list[bytes]:
         except Exception as e:
             logger.warning(f"Failed to download {f['name']} from {folder_path}: {e}")
     return result
+
+
+async def _pick_3d_phrase() -> str:
+    """Return a random phrase from the Sheets '3D Фразы' list. Falls back to 'YOUR TEXT'."""
+    phrases = sheets.get_phrases()
+    if not phrases:
+        try:
+            phrases = await sheets.load_phrases()
+        except Exception as e:
+            logger.warning(f"Could not load 3D phrases: {e}")
+    return random.choice(phrases) if phrases else "YOUR TEXT"
 
 
 async def _generate_image(prompt: str, model: str, ref_image: bytes | None = None) -> bytes:
@@ -219,7 +231,10 @@ async def _process_one(gen_id: int, item: dict, week: int) -> bool:
         gen_prompt = item.get("full_glasses") or item.get("full", "")
         overlay_text = item.get("full_no_glasses") or item.get("full", "")
     elif _is_3d_text(category):
-        gen_prompt = item.get("full", "")
+        raw_prompt = item.get("full", "")
+        # Substitute a random phrase from Sheets instead of "YOUR TEXT"
+        phrase = await _pick_3d_phrase()
+        gen_prompt = re.sub(r"YOUR TEXT", phrase, raw_prompt, flags=re.IGNORECASE)
         overlay_text = "ТВОЙ ТЕКСТ"
     else:
         gen_prompt = item.get("full", "")
