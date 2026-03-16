@@ -19,7 +19,7 @@ MODEL_IMAGE = "google/gemini-3.1-flash-image-preview"  # NanaBanana 2
 # ID из URL таблицы: docs.google.com/spreadsheets/d/{GSHEETS_ID}/...
 GSHEETS_ID = os.getenv("GSHEETS_ID")
 GSHEETS_CATEGORIES_SHEET = "Категории"
-GSHEETS_PHRASES_SHEET = "Фразы 3D"
+GSHEETS_PHRASES_GID = "1100011368"
 
 # Make.com
 MAKE_WEBHOOK_URL = os.getenv("MAKE_WEBHOOK_URL")

@@ -10,7 +10,7 @@ import urllib.parse
 
 import aiohttp
 
-from config import GSHEETS_ID, GSHEETS_CATEGORIES_SHEET, GSHEETS_PHRASES_SHEET
+from config import GSHEETS_ID, GSHEETS_CATEGORIES_SHEET, GSHEETS_PHRASES_GID
 
 logger = logging.getLogger(__name__)
 
@@ -18,13 +18,16 @@ _cache: dict = {}
 _phrases: list[str] = []
 
 
-def _csv_url(sheet_name: str) -> str:
+def _csv_url_by_name(sheet_name: str) -> str:
     encoded = urllib.parse.quote(sheet_name)
     return f"https://docs.google.com/spreadsheets/d/{GSHEETS_ID}/export?format=csv&sheet={encoded}"
 
 
-async def _fetch_csv(sheet_name: str) -> str:
-    url = _csv_url(sheet_name)
+def _csv_url_by_gid(gid: str) -> str:
+    return f"https://docs.google.com/spreadsheets/d/{GSHEETS_ID}/export?format=csv&gid={gid}"
+
+
+async def _fetch_csv(url: str) -> str:
     async with aiohttp.ClientSession() as session:
         async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
             if resp.status != 200:
@@ -72,7 +75,7 @@ def _parse_phrases(text: str) -> list[str]:
 
 async def load_sheets() -> dict:
     global _cache
-    text = await _fetch_csv(GSHEETS_CATEGORIES_SHEET)
+    text = await _fetch_csv(_csv_url_by_name(GSHEETS_CATEGORIES_SHEET))
     _cache = _parse_categories(text)
     logger.info(f"Sheets loaded: {len(_cache)} categories")
     return _cache
@@ -80,7 +83,7 @@ async def load_sheets() -> dict:
 
 async def load_phrases() -> list[str]:
     global _phrases
-    text = await _fetch_csv(GSHEETS_PHRASES_SHEET)
+    text = await _fetch_csv(_csv_url_by_gid(GSHEETS_PHRASES_GID))
     _phrases = _parse_phrases(text)
     logger.info(f"3D phrases loaded: {len(_phrases)}")
     return _phrases
