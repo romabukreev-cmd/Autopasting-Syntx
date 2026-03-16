@@ -23,6 +23,9 @@ GSHEETS_ID = os.getenv("GSHEETS_ID")
 MAKE_WEBHOOK_URL = os.getenv("MAKE_WEBHOOK_URL")
 MAKE_PIN_LINK = os.getenv("MAKE_PIN_LINK")  # ссылка на Telegram-канал
 
+# Pinterest — один борд для всех постов
+PINTEREST_BOARD_ID = os.getenv("PINTEREST_BOARD_ID", "")
+
 # Database
 DB_PATH = "syntx.db"
 

@@ -160,12 +160,9 @@ async def _file_accessible(gdrive_file_id: str) -> bool:
 
 
 async def _pick_images(ref_id: int) -> tuple[int, list[bytes]]:
-    """Pick images by random scenario, skipping deleted Drive files.
-    Scenario 1: 2 pins (1 NanaBana + 1 SeeDream)
+    """Pick clean images for TG post, skipping deleted Drive files.
+    Scenario 1: 1 clean image
     Scenario 2: 2 clean images
-    Scenario 3: 4 clean images
-    Scenario 4: 1 clean image (без текста)
-    Scenario 5: 1 pin (с текстом)
     """
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
@@ -182,18 +179,13 @@ async def _pick_images(ref_id: int) -> tuple[int, list[bytes]]:
     logger.info(f"ref_id={ref_id}: {len(files)}/{len(all_files)} files accessible on Drive")
 
     clean_files = [f for f in files if f["type"] == "clean"]
-    nb_pins = [f for f in files if f["type"] == "pin" and f["model"] == "nanobana"]
 
-    scenario = random.choices([1, 2, 3, 4], weights=[25, 25, 25, 25])[0]
+    scenario = random.choices([1, 2], weights=[50, 50])[0]
 
-    if scenario == 1:
-        chosen = random.sample(clean_files, min(2, len(clean_files)))
-    elif scenario == 2:
-        chosen = random.sample(clean_files, min(4, len(clean_files)))
-    elif scenario == 3:
+    if scenario == 1 or len(clean_files) < 2:
         chosen = random.sample(clean_files, min(1, len(clean_files)))
     else:
-        chosen = [random.choice(nb_pins)] if nb_pins else random.sample(clean_files, min(1, len(clean_files)))
+        chosen = random.sample(clean_files, 2)
 
     images = []
     for f in chosen:

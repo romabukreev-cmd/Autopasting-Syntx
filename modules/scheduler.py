@@ -30,6 +30,7 @@ from config import (
     DELAY_MAKE_WEBHOOK,
     IMAGES_PER_DAY_MAX,
     IMAGES_PER_DAY_MIN,
+    PINTEREST_BOARD_ID,
     PINTEREST_FILE_TTL_DAYS,
     TG_POST_HOUR_START,
     TG_POST_HOUR_END,
@@ -79,9 +80,6 @@ def _next_tg_slot(now: datetime) -> datetime:
 
 async def setup_posting_schedule(bot, chat_id: int):
     try:
-        await sheets.load_sheets()
-        sheets_data = sheets.get_cached()
-
         # Get pin-type files not yet scheduled
         async with aiosqlite.connect(DB_PATH) as db:
             db.row_factory = aiosqlite.Row
@@ -133,14 +131,12 @@ async def setup_posting_schedule(bot, chat_id: int):
                     break
                 item = rows[idx]
                 dt = tz.localize(datetime(day.year, day.month, day.day, hour, random.randint(0, 59)))
-                cat_data = sheets_data.get(item["category"], {})
-                board_id = cat_data.get("board_id", "")
                 schedule_entries.append({
                     "generation_file_id": item["id"],
                     "ref_id": item["ref_id"],
                     "gdrive_file_id": item["gdrive_file_id"],
                     "category": item["category"],
-                    "board_id": board_id,
+                    "board_id": PINTEREST_BOARD_ID,
                     "scheduled_at": dt.isoformat(),
                 })
                 idx += 1
@@ -186,9 +182,6 @@ async def setup_posting_schedule(bot, chat_id: int):
 async def setup_test_schedule(bot, chat_id: int):
     """Schedule all unscheduled pins immediately (for testing all categories)."""
     try:
-        await sheets.load_sheets()
-        sheets_data = sheets.get_cached()
-
         async with aiosqlite.connect(DB_PATH) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
@@ -212,14 +205,12 @@ async def setup_test_schedule(bot, chat_id: int):
         async with aiosqlite.connect(DB_PATH) as db:
             for i, item in enumerate(rows):
                 dt = now + timedelta(seconds=i * 5)
-                cat_data = sheets_data.get(item["category"]) or sheets_data.get(f"ПРОМПТЫ / {item['category']}") or {}
-                board_id = cat_data.get("board_id", "")
                 await db.execute(
                     """INSERT INTO pins_schedule
                        (generation_file_id, ref_id, gdrive_file_id, category, board_id, scheduled_at, status)
                        VALUES (?, ?, ?, ?, ?, ?, 'pending')""",
                     (item["id"], item["ref_id"], item["gdrive_file_id"],
-                     item["category"], board_id, dt.isoformat()),
+                     item["category"], PINTEREST_BOARD_ID, dt.isoformat()),
                 )
             await db.commit()
 
@@ -334,29 +325,20 @@ async def publish_due_pins(bot, admin_chat_id: int):
 
 
 async def _check_ref_tg_trigger(ref_id: int):
-    """If all pins for ref_id are published, schedule a TG post."""
+    """If at least one pin for ref_id is published, schedule a TG post."""
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
 
-        # Count total, published and failed pins for this ref
+        # Check if at least one pin is published
         async with db.execute(
-            "SELECT COUNT(*) as total FROM pins_schedule WHERE ref_id = ?", (ref_id,)
-        ) as cur:
-            total_row = await cur.fetchone()
-        async with db.execute(
-            "SELECT "
-            "SUM(CASE WHEN status='published' THEN 1 ELSE 0 END) as done, "
-            "SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) as failed "
-            "FROM pins_schedule WHERE ref_id = ?",
+            "SELECT COUNT(*) as done FROM pins_schedule WHERE ref_id = ? AND status = 'published'",
             (ref_id,),
         ) as cur:
             done_row = await cur.fetchone()
 
-        total = total_row["total"] if total_row else 0
         done = done_row["done"] or 0 if done_row else 0
-        failed = done_row["failed"] or 0 if done_row else 0
 
-        if total == 0 or done + failed < total:
+        if done == 0:
             return
 
         # Check if TG post already exists for this ref (pending or already posted)
