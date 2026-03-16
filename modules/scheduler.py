@@ -379,7 +379,13 @@ async def publish_due_tg_posts(bot):
     for row in due:
         try:
             prompts = json_loads_safe(row["prompts"])
-            prompt_text = prompts[0].get("full", "") if prompts else ""
+            p = prompts[0] if prompts else {}
+            cat = row["category"].lower()
+            if "нейрофото" in cat:
+                # Show version without glasses for public TG post
+                prompt_text = p.get("full_no_glasses") or p.get("full", "")
+            else:
+                prompt_text = p.get("full", "")
             await post_tg(bot, tg_post_id=row["id"], ref_id=row["ref_id"],
                           prompt=prompt_text, category=row["category"])
         except Exception as e:
