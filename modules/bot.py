@@ -38,6 +38,7 @@ def kb_main():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Pinterest", callback_data="menu:pinterest")],
         [InlineKeyboardButton(text="Telegram", callback_data="menu:telegram")],
+        [InlineKeyboardButton(text="Threads", callback_data="menu:threads")],
         [InlineKeyboardButton(text="ВКонтакте", callback_data="menu:vk")],
     ])
 
@@ -71,7 +72,8 @@ def kb_soon():
 def kb_reply_main():
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="Pinterest"), KeyboardButton(text="Telegram"), KeyboardButton(text="ВКонтакте")],
+            [KeyboardButton(text="Pinterest"), KeyboardButton(text="Telegram")],
+            [KeyboardButton(text="Threads"), KeyboardButton(text="ВКонтакте")],
         ],
         resize_keyboard=True,
         persistent=True,
@@ -444,13 +446,201 @@ async def cb_clear(call: CallbackQuery):
 
 # --- TG post edit: catch admin's free text when in edit mode ---
 
-@router.message(F.text & ~F.text.in_({"Pinterest", "Telegram", "ВКонтакте"}))
+# ─────────────────────────────────────
+# Threads меню
+# ─────────────────────────────────────
+
+def kb_threads():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📰 Запустить новости сейчас", callback_data="th:run_news")],
+        [InlineKeyboardButton(text="✍️ Сгенерировать посты на день", callback_data="th:run_format")],
+        [InlineKeyboardButton(text="📋 Статус", callback_data="th:status")],
+        [InlineKeyboardButton(text="← Назад", callback_data="menu:main")],
+    ])
+
+
+@router.callback_query(F.data == "menu:threads")
+@admin_only
+async def cb_menu_threads(call: CallbackQuery):
+    await call.message.edit_text("Threads", reply_markup=kb_threads())
+
+
+@router.callback_query(F.data == "th:run_news")
+@admin_only
+async def cb_threads_run_news(call: CallbackQuery):
+    await call.answer("Запускаю мониторинг новостей...")
+    await call.message.answer("Читаю каналы и генерирую рерайт...")
+    from modules.threads_agent import run_news_job
+    import asyncio
+    asyncio.create_task(run_news_job(call.bot, call.message.chat.id))
+
+
+@router.callback_query(F.data == "th:run_format")
+@admin_only
+async def cb_threads_run_format(call: CallbackQuery):
+    await call.answer("Генерирую посты по расписанию...")
+    await call.message.answer("Генерирую контент на сегодня...")
+    from modules.threads_agent import run_format_job
+    import asyncio
+    asyncio.create_task(run_format_job(call.bot, call.message.chat.id))
+
+
+@router.callback_query(F.data == "th:status")
+@admin_only
+async def cb_threads_status(call: CallbackQuery):
+    import aiosqlite
+    from config import DB_PATH
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("""
+            SELECT
+                SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) as pending,
+                SUM(CASE WHEN status='sent' THEN 1 ELSE 0 END) as sent,
+                SUM(CASE WHEN status='scheduled' THEN 1 ELSE 0 END) as scheduled,
+                SUM(CASE WHEN status='published' THEN 1 ELSE 0 END) as published,
+                SUM(CASE WHEN status='cancelled' THEN 1 ELSE 0 END) as cancelled
+            FROM threads_posts
+        """) as cur:
+            row = await cur.fetchone()
+    await call.answer()
+    await call.message.answer(
+        f"Threads — статус\n\n"
+        f"На апруве: {row['sent'] or 0}\n"
+        f"Запланировано: {row['scheduled'] or 0}\n"
+        f"Опубликовано: {row['published'] or 0}\n"
+        f"Отменено: {row['cancelled'] or 0}"
+    )
+
+
+# ─────────────────────────────────────
+# Threads апрув-флоу
+# ─────────────────────────────────────
+
+@router.callback_query(F.data.startswith("th:approve:"))
+@admin_only
+async def cb_th_approve(call: CallbackQuery):
+    post_id = int(call.data.split(":")[2])
+    from modules.threads_poster import approve_post
+    await call.answer("Публикую...")
+    try:
+        ok = await approve_post(call.bot, post_id)
+        if ok:
+            await call.message.edit_reply_markup(reply_markup=None)
+            await call.message.answer("✅ Опубликовано в Threads")
+        else:
+            await call.answer("Пост уже обработан", show_alert=True)
+    except Exception as e:
+        await call.answer(f"Ошибка: {e}", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("th:cancel:"))
+@admin_only
+async def cb_th_cancel(call: CallbackQuery):
+    post_id = int(call.data.split(":")[2])
+    from modules.threads_poster import cancel_post
+    await cancel_post(post_id)
+    await call.message.edit_reply_markup(reply_markup=None)
+    await call.answer("Отменено")
+
+
+@router.callback_query(F.data.startswith("th:edit:"))
+@admin_only
+async def cb_th_edit(call: CallbackQuery):
+    post_id = int(call.data.split(":")[2])
+    from modules.threads_poster import start_edit, get_post_text
+    start_edit(call.from_user.id, post_id)
+    text = await get_post_text(post_id)
+    await call.answer()
+    await call.message.edit_reply_markup(reply_markup=None)
+    await call.message.answer(
+        f"Текущий текст:\n\n{text}\n\nОтправь отредактированную версию:"
+    )
+
+
+@router.callback_query(F.data.startswith("th:schedule:"))
+@admin_only
+async def cb_th_schedule(call: CallbackQuery):
+    post_id = int(call.data.split(":")[2])
+    from modules.threads_poster import kb_time_picker
+    await call.message.edit_reply_markup(reply_markup=kb_time_picker(post_id))
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("th:back:"))
+@admin_only
+async def cb_th_back(call: CallbackQuery):
+    post_id = int(call.data.split(":")[2])
+    from modules.threads_poster import kb_approval
+    await call.message.edit_reply_markup(reply_markup=kb_approval(post_id))
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("th:time:"))
+@admin_only
+async def cb_th_time(call: CallbackQuery):
+    # формат: th:time:{post_id}:{hour}:{minute}
+    parts = call.data.split(":")
+    post_id = int(parts[2])
+    hour = int(parts[3])
+    minute = int(parts[4])
+
+    from modules.threads_poster import schedule_post
+    from datetime import datetime, timezone, timedelta
+
+    now_msk = datetime.now(timezone.utc) + timedelta(hours=3)
+    scheduled_msk = now_msk.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if scheduled_msk <= now_msk:
+        scheduled_msk += timedelta(days=1)
+    scheduled_utc = scheduled_msk - timedelta(hours=3)
+
+    await schedule_post(post_id, scheduled_utc)
+    await call.message.edit_reply_markup(reply_markup=None)
+    await call.answer()
+    await call.message.answer(f"🕐 Запланировано на {scheduled_msk.strftime('%d.%m %H:%M')} МСК")
+
+
+@router.callback_query(F.data.startswith("th:time_custom:"))
+@admin_only
+async def cb_th_time_custom(call: CallbackQuery):
+    post_id = int(call.data.split(":")[2])
+    from modules.threads_poster import _WAITING_TIME
+    _WAITING_TIME[call.from_user.id] = post_id
+    await call.answer()
+    await call.message.edit_reply_markup(reply_markup=None)
+    await call.message.answer("Введи время в формате ЧЧ:ММ (по МСК):")
+
+
+@router.message(F.text & ~F.text.in_({"Pinterest", "Telegram", "ВКонтакте", "Threads"}))
 @admin_only
 async def handle_edit_text(message: Message):
-    from modules.tg_poster import _WAITING_EDIT, apply_edit
-    if message.from_user.id not in _WAITING_EDIT:
+    from modules.threads_poster import _WAITING_EDIT, _WAITING_TIME, apply_edit, schedule_post
+    from modules.tg_poster import _WAITING_EDIT as TG_WAITING_EDIT, apply_edit as tg_apply_edit
+
+    # Редактирование Threads поста
+    if message.from_user.id in _WAITING_EDIT:
+        await apply_edit(message.bot, message.from_user.id, message.chat.id, message.text)
         return
-    await apply_edit(message.bot, message.from_user.id, message.text)
+
+    # Ввод времени для Threads поста
+    if message.from_user.id in _WAITING_TIME:
+        post_id = _WAITING_TIME.pop(message.from_user.id)
+        try:
+            from datetime import datetime, timezone, timedelta
+            h, m = map(int, message.text.strip().split(":"))
+            now_msk = datetime.now(timezone.utc) + timedelta(hours=3)
+            scheduled_msk = now_msk.replace(hour=h, minute=m, second=0, microsecond=0)
+            if scheduled_msk <= now_msk:
+                scheduled_msk += timedelta(days=1)
+            scheduled_utc = scheduled_msk - timedelta(hours=3)
+            await schedule_post(post_id, scheduled_utc)
+            await message.answer(f"🕐 Запланировано на {scheduled_msk.strftime('%d.%m %H:%M')} МСК")
+        except Exception:
+            await message.answer("Неверный формат. Используй ЧЧ:ММ, например 19:30")
+        return
+
+    # Редактирование TG поста (старый код)
+    if message.from_user.id in TG_WAITING_EDIT:
+        await tg_apply_edit(message.bot, message.from_user.id, message.text)
 
 
 # --- Reply keyboard text handlers ---
@@ -467,6 +657,12 @@ async def reply_pinterest(message: Message):
 @admin_only
 async def reply_telegram(message: Message):
     await _show_menu(message.bot, message.chat.id, "Telegram", kb_telegram())
+
+
+@router.message(F.text == "Threads")
+@admin_only
+async def reply_threads(message: Message):
+    await _show_menu(message.bot, message.chat.id, "Threads", kb_threads())
 
 
 @router.message(F.text == "ВКонтакте")

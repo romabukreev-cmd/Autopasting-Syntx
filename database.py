@@ -81,6 +81,22 @@ async def init_db():
             )
         """)
 
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS threads_posts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                type TEXT NOT NULL,
+                source TEXT,
+                text TEXT NOT NULL,
+                media_url TEXT,
+                media_type TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                scheduled_at TEXT,
+                published_at TEXT,
+                created_at TEXT NOT NULL,
+                tg_msg_id INTEGER
+            )
+        """)
+
         # Migrations for existing DBs
         for col, definition in [
             ("tg_posting_status", "TEXT NOT NULL DEFAULT 'idle'"),

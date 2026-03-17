@@ -65,3 +65,18 @@ TG_CHANNEL_ID = os.getenv("TG_CHANNEL_ID", "@roman_s_neuro")
 MODEL_TG_POST = "anthropic/claude-sonnet-4-6"
 TG_POST_HOUR_START = 10   # earliest hour for TG post (MSK)
 TG_POST_HOUR_END = 1      # latest hour for TG post (MSK, wraps midnight)
+
+# Threads
+THREADS_USER_ID = os.getenv("THREADS_USER_ID")
+THREADS_ACCESS_TOKEN = os.getenv("THREADS_ACCESS_TOKEN")
+THREADS_API_BASE = "https://graph.threads.net/v1.0"
+
+# Threads Agent — источники (TG каналы для мониторинга)
+THREADS_SOURCE_CHANNELS = ["salikov_i", "dailyprompts"]
+THREADS_LOOKBACK_HOURS = 13   # смотрим посты за последние N часов
+
+# Telethon (отдельный TG аккаунт для чтения каналов)
+TELETHON_API_ID = int(os.getenv("TELETHON_API_ID", "0"))
+TELETHON_API_HASH = os.getenv("TELETHON_API_HASH", "")
+TELETHON_PHONE = os.getenv("TELETHON_PHONE", "")
+TELETHON_SESSION = "telethon_session"  # имя файла сессии
