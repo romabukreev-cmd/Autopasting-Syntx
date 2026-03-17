@@ -39,7 +39,6 @@ def kb_main():
         [InlineKeyboardButton(text="Pinterest", callback_data="menu:pinterest")],
         [InlineKeyboardButton(text="Telegram", callback_data="menu:telegram")],
         [InlineKeyboardButton(text="Threads", callback_data="menu:threads")],
-        [InlineKeyboardButton(text="ВКонтакте", callback_data="menu:vk")],
     ])
 
 
@@ -73,7 +72,7 @@ def kb_reply_main():
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="Pinterest"), KeyboardButton(text="Telegram")],
-            [KeyboardButton(text="Threads"), KeyboardButton(text="ВКонтакте")],
+            [KeyboardButton(text="Threads")],
         ],
         resize_keyboard=True,
         persistent=True,
@@ -201,11 +200,6 @@ async def cb_tg_status(call: CallbackQuery):
         f"Опубликовано: {posted}"
     )
 
-
-@router.callback_query(F.data == "menu:vk")
-@admin_only
-async def cb_menu_vk(call: CallbackQuery):
-    await call.message.edit_text("ВКонтакте — скоро", reply_markup=kb_soon())
 
 
 # --- Week switcher ---
@@ -613,7 +607,7 @@ async def cb_th_time_custom(call: CallbackQuery):
     await call.message.answer("Введи время в формате ЧЧ:ММ (по МСК):")
 
 
-@router.message(F.text & ~F.text.in_({"Pinterest", "Telegram", "ВКонтакте", "Threads"}))
+@router.message(F.text & ~F.text.in_({"Pinterest", "Telegram", "Threads"}))
 @admin_only
 async def handle_edit_text(message: Message):
     from modules.threads_poster import _WAITING_EDIT, _WAITING_TIME, apply_edit, schedule_post
@@ -748,7 +742,3 @@ async def reply_threads(message: Message):
     await _show_menu(message.bot, message.chat.id, "Threads", kb_threads())
 
 
-@router.message(F.text == "ВКонтакте")
-@admin_only
-async def reply_vk(message: Message):
-    await _show_menu(message.bot, message.chat.id, "ВКонтакте — скоро", kb_soon())
