@@ -36,7 +36,7 @@ DRIVE_BASE_PATH = os.getenv("DRIVE_BASE_PATH", "PROJECTS/Автопостинг 
 DRIVE_FOLDER_REFS = "Референс"
 DRIVE_FOLDER_GENS = "База генераций"
 DRIVE_FOLDER_USER_PHOTOS = "Мои фото"   # папка с твоими фотками для нейрофото
-DRIVE_FOLDER_LOGOS = "Лого"             # папка с логотипами для генераций лого
+DRIVE_FOLDER_LOGOS = "Логотипы"          # папка с логотипами для генераций лого
 
 # Generation
 IMAGES_PER_WEEK = 100

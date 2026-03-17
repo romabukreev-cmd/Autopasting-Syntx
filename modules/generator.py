@@ -15,6 +15,7 @@ from config import (
     DRIVE_BASE_PATH,
     DRIVE_FOLDER_GENS,
     DRIVE_FOLDER_LOGOS,
+    DRIVE_FOLDER_REFS,
     DRIVE_FOLDER_USER_PHOTOS,
     GENERATIONS_PER_PROMPT,
     IMAGES_PER_DAY_MIN,
@@ -84,7 +85,7 @@ async def _pick_3d_phrase() -> str:
     return random.choice(phrases) if phrases else "YOUR TEXT"
 
 
-async def _generate_image(prompt: str, model: str, ref_image: bytes | None = None) -> bytes:
+async def _generate_image(prompt: str, model: str, ref_image: bytes | None = None, aspect_ratio: str = "2:3") -> bytes:
     """Call OpenRouter chat/completions with modalities=image to get image bytes.
     If ref_image is provided, it is passed as the first content part (image-to-image).
     """
@@ -110,7 +111,7 @@ async def _generate_image(prompt: str, model: str, ref_image: bytes | None = Non
                 "model": model,
                 "messages": [{"role": "user", "content": content}],
                 "modalities": modalities,
-                "image_config": {"aspect_ratio": "2:3"},
+                "image_config": {"aspect_ratio": aspect_ratio},
             },
         )
     resp.raise_for_status()
@@ -125,10 +126,10 @@ async def _generate_image(prompt: str, model: str, ref_image: bytes | None = Non
     return base64.b64decode(b64)
 
 
-async def _generate_with_retry(prompt: str, model: str, ref_image: bytes | None = None) -> bytes | None:
+async def _generate_with_retry(prompt: str, model: str, ref_image: bytes | None = None, aspect_ratio: str = "2:3") -> bytes | None:
     for attempt in range(MAX_GENERATION_ATTEMPTS):
         try:
-            return await _generate_image(prompt, model, ref_image)
+            return await _generate_image(prompt, model, ref_image, aspect_ratio)
         except Exception as e:
             logger.warning(f"Generation attempt {attempt + 1} failed: {e}")
             if attempt < MAX_GENERATION_ATTEMPTS - 1:
@@ -226,11 +227,13 @@ async def _process_one(gen_id: int, item: dict, week: int) -> bool:
     category = item["category"]
     base_path = f"{DRIVE_BASE_PATH}/{DRIVE_FOLDER_GENS}/week_{week}/{category}"
 
-    # Determine prompt for generation and text for overlay
+    # Determine prompt for generation, text for overlay, and aspect ratio
+    aspect_ratio = "2:3"
     if _is_neurophoto(category):
         gen_prompt = item.get("full_glasses") or item.get("full", "")
         overlay_text = item.get("full_no_glasses") or item.get("full", "")
     elif _is_3d_text(category):
+        aspect_ratio = "3:4"
         raw_prompt = item.get("full", "")
         # Substitute a random phrase from Sheets instead of "YOUR TEXT"
         phrase = await _pick_3d_phrase()
@@ -241,7 +244,10 @@ async def _process_one(gen_id: int, item: dict, week: int) -> bool:
             logger.warning(f"gen_{gen_id:04d} 3D prompt had no YOUR TEXT placeholder, prepended phrase")
         else:
             gen_prompt = adapted
-        overlay_text = "ТВОЙ ТЕКСТ"
+        # Overlay shows the prompt with "ТВОЙ ТЕКСТ" placeholder (not the actual phrase)
+        overlay_text = re.sub(r"YOUR\s+TEXT", "ТВОЙ ТЕКСТ", raw_prompt, flags=re.IGNORECASE)
+        if overlay_text == raw_prompt:
+            overlay_text = f"ТВОЙ ТЕКСТ. {raw_prompt[:80]}"
     else:
         gen_prompt = item.get("full", "")
         overlay_text = item.get("full", "")
@@ -264,6 +270,15 @@ async def _process_one(gen_id: int, item: dict, week: int) -> bool:
             ref_images[i] = lg
         if not logos:
             logger.warning(f"gen_{gen_id:04d} No logos found in {logos_path}, generating text-only")
+    elif _is_3d_text(category) and "без промпта" in category.lower():
+        # For 3D without prompt: pass the reference image as style guide (i2i)
+        ref_path = f"{DRIVE_BASE_PATH}/{DRIVE_FOLDER_REFS}/{category}/{item['ref_filename']}"
+        try:
+            ref_data = await drive.download_file(ref_path)
+            ref_images = [ref_data] * GENERATIONS_PER_PROMPT
+            logger.info(f"gen_{gen_id:04d} 3D без промпта: loaded ref for i2i style guidance")
+        except Exception as e:
+            logger.warning(f"gen_{gen_id:04d} could not load 3D ref for i2i: {e}")
 
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
@@ -289,7 +304,7 @@ async def _process_one(gen_id: int, item: dict, week: int) -> bool:
     # --- NanaBanana: GENERATIONS_PER_PROMPT images ---
     for n in range(GENERATIONS_PER_PROMPT):
         ref_img = ref_images[n]
-        nb_data = await _generate_with_retry(gen_prompt, MODEL_IMAGE, ref_img)
+        nb_data = await _generate_with_retry(gen_prompt, MODEL_IMAGE, ref_img, aspect_ratio)
         if nb_data:
             fname = f"gen_{gen_id:04d}_{n+1}.jpg"
             clean_path = f"{base_path}/nanobana/{fname}"

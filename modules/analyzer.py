@@ -81,19 +81,26 @@ The output language must match the input prompt language.
 Return JSON only, no markdown:
 {"adapted": "<universalized prompt>"}"""
 
-_PROMPT_ANALYZE_3D_IMAGE = """You are analyzing a 3D text effect image to write an AI generation prompt.
+_PROMPT_ANALYZE_3D_IMAGE = """You are analyzing a 3D text effect image to write a highly accurate AI generation prompt.
 
-The image shows stylized 3D text with a specific visual effect. Your task: write a detailed generation prompt that reproduces this text effect style.
+The image shows stylized 3D text with a specific visual effect. Your task: write a HIGHLY DETAILED prompt (100-200 words) that reproduces this EXACT effect as closely as possible.
 
-Requirements for the prompt you write:
-- Describe the 3D text style, material, texture, lighting, shadows, and effects in detail.
-- Include exactly this phrase: "plain solid-color background"
-- Include exactly this phrase: "top 20% and bottom 20% of the image must remain empty"
-- Do NOT mention any specific letters, words, or phrases — use "YOUR TEXT" as a placeholder instead.
-- Write the prompt in English.
+Analyze and describe every detail:
+1. Letter shape: blocky, slim, inflated, extruded, carved, rounded, sharp-edged, etc.
+2. Material & surface: exact type (brushed gold, chrome, glass, plastic, stone, neon, wood, liquid metal, etc.) — be very specific, not generic.
+3. Colors: exact hues of the letters, highlights, shadows, reflections.
+4. Lighting: direction, intensity, color of light source, specular highlights, shadow softness.
+5. Special effects: glow, particles, sparkles, smoke, fire, vines, cracks, gems, etc. — describe exactly what you see.
+6. Background: exact color (e.g. "deep navy blue", "pure white", "dark charcoal").
+
+Mandatory requirements to include:
+- Use "YOUR TEXT" as the placeholder for the 3D text content — never mention specific letters or words.
+- Include: "plain solid-color background"
+- Include: "top 20% and bottom 20% of the image must remain empty, no elements"
+- Write the prompt in English only.
 
 Return JSON only, no markdown:
-{"prompt": "<generation prompt>"}"""
+{"prompt": "<highly detailed generation prompt>"}"""
 
 _PROMPT_ADAPT_3D_WITH_PROMPT = """You are adapting a 3D text generation prompt.
 
