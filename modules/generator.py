@@ -227,12 +227,14 @@ async def _process_one(gen_id: int, item: dict, week: int) -> bool:
     category = item["category"]
     base_path = f"{DRIVE_BASE_PATH}/{DRIVE_FOLDER_GENS}/week_{week}/{category}"
 
-    # Determine prompt for generation, text for overlay, and aspect ratio
+    # Determine prompt for generation, text for overlay, aspect ratio, and overlay type
     aspect_ratio = "2:3"
     if _is_neurophoto(category):
+        overlay_type = "neurophoto"
         gen_prompt = item.get("full_glasses") or item.get("full", "")
         overlay_text = item.get("full_no_glasses") or item.get("full", "")
     elif _is_3d_text(category):
+        overlay_type = "3d"
         aspect_ratio = "3:4"
         raw_prompt = item.get("full", "")
         # Substitute a random phrase from Sheets instead of "YOUR TEXT"
@@ -248,7 +250,12 @@ async def _process_one(gen_id: int, item: dict, week: int) -> bool:
         overlay_text = re.sub(r"YOUR\s+TEXT", "ТВОЙ ТЕКСТ", raw_prompt, flags=re.IGNORECASE)
         if overlay_text == raw_prompt:
             overlay_text = f"ТВОЙ ТЕКСТ. {raw_prompt[:80]}"
+    elif _is_logo(category):
+        overlay_type = "logo"
+        gen_prompt = item.get("full", "")
+        overlay_text = item.get("full", "")
     else:
+        overlay_type = "neurophoto"
         gen_prompt = item.get("full", "")
         overlay_text = item.get("full", "")
 
@@ -310,7 +317,7 @@ async def _process_one(gen_id: int, item: dict, week: int) -> bool:
             clean_path = f"{base_path}/nanobana/{fname}"
             pin_path = f"{base_path}/nanobana_pin/{fname}"
             await _save_file(nb_data, clean_path, "nanobana", "clean")
-            nb_pin = overlay.apply_overlay(nb_data, overlay_text, "nanobana")
+            nb_pin = overlay.apply_overlay(nb_data, overlay_text, overlay_type)
             await _save_file(nb_pin, pin_path, "nanobana", "pin")
             ok += 1
             logger.info(f"gen_{gen_id:04d} NanaBana {n+1}/{GENERATIONS_PER_PROMPT}: ok")
