@@ -17,12 +17,9 @@ from datetime import datetime, timezone, timedelta
 
 import aiosqlite
 import httpx
-from telethon import TelegramClient
-from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument
 
 from config import (
-    DB_PATH, TELETHON_API_ID, TELETHON_API_HASH, TELETHON_SESSION,
-    THREADS_SOURCE_CHANNELS, THREADS_LOOKBACK_HOURS, OPENROUTER_API_KEY,
+    DB_PATH, OPENROUTER_API_KEY,
 )
 
 logger = logging.getLogger(__name__)
