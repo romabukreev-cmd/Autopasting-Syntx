@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import logging
+import re
 from datetime import date
 
 import aiosqlite
@@ -161,16 +162,31 @@ async def _adapt_logo(base_prompt: str) -> dict:
 async def _analyze_3d_image(image_data: bytes) -> dict:
     """GPT-4o analyzes 3D text image and generates a prompt (no text on image)."""
     b64 = base64.b64encode(image_data).decode()
-    resp = await client.chat.completions.create(
-        model=MODEL_ANALYZER,
-        messages=[{"role": "user", "content": [
-            {"type": "text", "text": _PROMPT_ANALYZE_3D_IMAGE},
-            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-        ]}],
-        response_format={"type": "json_object"},
-        max_tokens=2000,
-    )
-    return json.loads(resp.choices[0].message.content)
+    # First try with json_object mode
+    for use_json_mode in (True, False):
+        kwargs = dict(
+            model=MODEL_ANALYZER,
+            messages=[{"role": "user", "content": [
+                {"type": "text", "text": _PROMPT_ANALYZE_3D_IMAGE},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+            ]}],
+            max_tokens=2000,
+        )
+        if use_json_mode:
+            kwargs["response_format"] = {"type": "json_object"}
+        resp = await client.chat.completions.create(**kwargs)
+        content = resp.choices[0].message.content
+        if content is None:
+            logger.warning("_analyze_3d_image: content is None, retrying without json_object mode")
+            continue
+        try:
+            return json.loads(content)
+        except Exception:
+            # Extract JSON from plain text response
+            match = re.search(r'\{.*\}', content, re.DOTALL)
+            if match:
+                return json.loads(match.group())
+    return {"prompt": ""}
 
 
 async def _adapt_3d_prompt(base_prompt: str) -> dict:
