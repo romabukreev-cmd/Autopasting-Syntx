@@ -142,14 +142,16 @@ def _combined_caption(main_text: str, prompt_block: str) -> str | None:
     return combined if len(combined) <= TG_CAPTION_LIMIT else None
 
 
-async def _file_accessible(gdrive_file_id: str) -> bool:
-    """Check if file is still on Drive via lh3 HEAD request."""
-    url = f"https://lh3.googleusercontent.com/d/{gdrive_file_id}"
+async def _file_accessible(filename: str) -> bool:
+    """Check if file exists on Drive via rclone lsf."""
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.head(url, allow_redirects=True,
-                                    timeout=aiohttp.ClientTimeout(total=8)) as resp:
-                return resp.headers.get("Content-Type", "").startswith("image/")
+        proc = await asyncio.create_subprocess_exec(
+            "rclone", "lsf", f"gdrive:{filename}",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+        return bool(stdout.strip())
     except Exception:
         return False
 
@@ -169,7 +171,7 @@ async def _pick_images(ref_id: int) -> tuple[int, list[bytes]]:
             all_files = [dict(r) for r in await cur.fetchall()]
 
     # Filter to files that still exist on Drive (concurrent checks)
-    checks = await asyncio.gather(*[_file_accessible(f["gdrive_file_id"]) for f in all_files])
+    checks = await asyncio.gather(*[_file_accessible(f["filename"]) for f in all_files])
     files = [f for f, ok in zip(all_files, checks) if ok]
     logger.info(f"ref_id={ref_id}: {len(files)}/{len(all_files)} files accessible on Drive")
 
