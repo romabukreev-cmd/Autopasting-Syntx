@@ -21,7 +21,7 @@ PROMPT_GAP      = 15   # gap between /PROMPT label and prompt body
 FONT_SIZE_HANDLE = 20  # handle block ("копируй в TG / @roman_s_neuro")
 FONT_SIZE_BODY   = 15  # prompt body text
 FONT_SIZE_TITLE_NEURO = 60   # /PROMPT JoyStix for neurophoto
-FONT_SIZE_TITLE_LOGO  = 70   # PROMPT JoyStix for logo
+FONT_SIZE_TITLE_LOGO  = 84   # PROMPT JoyStix for logo
 FONT_SIZE_3D_HEADER   = 80   # "Nano Banana" / "prompt" SF for 3d
 
 
@@ -204,7 +204,7 @@ def _draw_logo(img: Image.Image, draw: ImageDraw.ImageDraw, prompt: str, scale: 
     sz_title    = round(FONT_SIZE_TITLE_LOGO * scale)
     sz_body     = round(FONT_SIZE_BODY * scale)
     text_area_w = w - margin * 2
-    header_gap  = round(12 * scale)   # gap between PROMPT and handle block
+    header_gap  = round(18 * scale)   # gap between PROMPT and handle block
 
     f_li  = _load_font(FONT_SF_LIGHT_ITALIC, sz_handle)
     f_sb  = _load_font(FONT_SF_SEMIBOLD, sz_handle)
@@ -256,7 +256,7 @@ def _draw_3d(img: Image.Image, draw: ImageDraw.ImageDraw, prompt: str, scale: fl
     sz_header   = round(FONT_SIZE_3D_HEADER * scale)
     sz_body     = round(FONT_SIZE_BODY * scale)
     text_area_w = w - margin * 2
-    handle_gap  = round(10 * scale)   # gap between handle block and prompt body
+    handle_gap  = round(20 * scale)   # gap between handle block and prompt body
 
     f_li    = _load_font(FONT_SF_LIGHT_ITALIC, sz_handle)
     f_sb    = _load_font(FONT_SF_SEMIBOLD, sz_handle)
