@@ -65,21 +65,15 @@ def _in_tg_window(hour: int) -> bool:
 
 
 def _next_tg_slot(now: datetime) -> datetime:
-    """Return next available TG posting time within window (wraps midnight).
-    Минимальная задержка 4-8 часов — чтобы TG-пост не шёл одновременно с первым пином.
-    """
+    """Return next available TG posting time within window (wraps midnight)."""
     now_local = now.astimezone(tz)
-    # Добавляем задержку: TG-пост не раньше чем через 4-8 часов после первого пина
-    delay_hours = random.randint(4, 8)
-    earliest = now_local + timedelta(hours=delay_hours)
-
-    if _in_tg_window(earliest.hour):
-        return earliest.replace(second=0, microsecond=0) + timedelta(minutes=random.randint(0, 20))
-    # Earliest вышло за окно — берём следующее начало окна
-    today_start = earliest.replace(
+    if _in_tg_window(now_local.hour):
+        return now_local + timedelta(minutes=random.randint(1, 5))
+    # Outside window — next window start today or tomorrow
+    today_start = now_local.replace(
         hour=TG_POST_HOUR_START, minute=random.randint(0, 30), second=0, microsecond=0
     )
-    if today_start > earliest:
+    if today_start > now_local:
         return today_start
     return today_start + timedelta(days=1)
 
