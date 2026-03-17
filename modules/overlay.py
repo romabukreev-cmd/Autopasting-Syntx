@@ -10,34 +10,33 @@ logger = logging.getLogger(__name__)
 FONTS_DIR = Path(__file__).parent.parent / "fonts"
 
 # Font paths relative to fonts/
-FONT_SERPANTIN = "Serpantin/Serpantin.ttf"
+FONT_SF_LIGHT_ITALIC = "San Francisco Pro Display/SF-Pro-Display-LightItalic.otf"
+FONT_SF_SEMIBOLD = "San Francisco Pro Display/SF-Pro-Display-Semibold.otf"
 FONT_SF_REGULAR = "San Francisco Pro Display/SF-Pro-Display-Regular.otf"
-FONT_SF_BOLD = "San Francisco Pro Display/SF-Pro-Display-Bold.otf"
+FONT_JOYSTIX = "Joystix/joystix monospace.ttf"
 
 
 @dataclass
 class OverlayConfig:
-    model_label: str       # top-left label, can contain \n
-    tg_handle: str         # top-right, e.g. "TG: @roman_s_neuro"
     design_width: int      # Figma canvas width — all px values are relative to this
     margin: int            # safe zone on all edges (px)
     gradient_height: int   # height of bottom gradient rectangle (px)
-    font_size_title: int   # Serpantin: model name + /промпт label
+    font_size_top: int     # SF Pro: top 2-line handle block
+    font_size_title: int   # JoyStix: /PROMPT label
     font_size_prompt: int  # SF Pro Regular: prompt body text
-    font_size_tg: int      # SF Pro Bold: TG handle
-    prompt_gap: int        # gap between /промпт label and prompt text (px)
+    prompt_gap: int        # gap between /PROMPT label and prompt text (px)
+    top_line_gap: int      # gap between the 2 top lines (px)
 
 
 NANOBANA_CONFIG = OverlayConfig(
-    model_label="NANO\nBANANA",
-    tg_handle="TG: @roman_s_neuro",
     design_width=848,
     margin=25,
     gradient_height=270,
-    font_size_title=75,
+    font_size_top=20,
+    font_size_title=60,
     font_size_prompt=15,
-    font_size_tg=20,
     prompt_gap=15,
+    top_line_gap=4,
 )
 
 _CONFIGS = {
@@ -140,13 +139,11 @@ def _draw_justified(
 def apply_overlay(image_data: bytes, prompt: str, model_type: str) -> bytes:
     """
     Apply design overlay to generated image.
-
-    model_type: "seedream" or "nanobana"
     Returns JPEG bytes.
     """
     cfg = _CONFIGS.get(model_type)
     if cfg is None:
-        raise ValueError(f"Unknown model_type: {model_type!r}. Use 'seedream' or 'nanobana'.")
+        raise ValueError(f"Unknown model_type: {model_type!r}")
 
     img = Image.open(io.BytesIO(image_data)).convert("RGBA")
     w, h = img.size
@@ -155,10 +152,11 @@ def apply_overlay(image_data: bytes, prompt: str, model_type: str) -> bytes:
     scale = w / cfg.design_width
     margin = round(cfg.margin * scale)
     gradient_height = round(cfg.gradient_height * scale)
+    font_size_top = round(cfg.font_size_top * scale)
     font_size_title = round(cfg.font_size_title * scale)
     font_size_prompt = round(cfg.font_size_prompt * scale)
-    font_size_tg = round(cfg.font_size_tg * scale)
     prompt_gap = round(cfg.prompt_gap * scale)
+    top_line_gap = round(cfg.top_line_gap * scale)
 
     # --- Auto text color: analyze top and bottom zones ---
     top_theme = _region_brightness(img, 0, min(margin * 3, h))
@@ -169,60 +167,55 @@ def apply_overlay(image_data: bytes, prompt: str, model_type: str) -> bytes:
 
     draw = ImageDraw.Draw(img)
 
-    font_title = _load_font(FONT_SERPANTIN, font_size_title)
+    font_light_italic = _load_font(FONT_SF_LIGHT_ITALIC, font_size_top)
+    font_semibold = _load_font(FONT_SF_SEMIBOLD, font_size_top)
+    font_joystix = _load_font(FONT_JOYSTIX, font_size_title)
     font_prompt = _load_font(FONT_SF_REGULAR, font_size_prompt)
-    font_tg = _load_font(FONT_SF_BOLD, font_size_tg)
 
     text_area_w = w - margin * 2
 
-    # --- Top-left: model name (Serpantin, may be multiline) ---
-    # Align visual top of title with visual top of TG handle at y=margin
-    first_line = cfg.model_label.split("\n")[0]
-    title_top_offset = draw.textbbox((0, 0), first_line, font=font_title)[1]
-    title_y = margin - title_top_offset
-    draw.multiline_text(
-        (margin, title_y),
-        cfg.model_label,
-        font=font_title,
-        fill=top_color,
-        align="left",
-        spacing=0,
-    )
+    # --- Top center: 2-line handle block ---
+    # Line 1: "копируй в TG"  (LightItalic)
+    # Line 2: "@roman_s_neuro" (SemiBold)
+    line1 = "копируй в TG"
+    line2 = "@roman_s_neuro"
+    bb1 = draw.textbbox((0, 0), line1, font=font_light_italic)
+    bb2 = draw.textbbox((0, 0), line2, font=font_semibold)
+    line1_h = bb1[3] - bb1[1]
+    line2_h = bb2[3] - bb2[1]
+    block_h = line1_h + top_line_gap + line2_h
 
-    # --- Top-right: TG handle (SF Pro Bold, right-aligned) ---
-    tg_bbox = draw.textbbox((0, 0), cfg.tg_handle, font=font_tg)
-    tg_w = tg_bbox[2] - tg_bbox[0]
-    tg_y = margin - tg_bbox[1]
-    draw.text((w - margin - tg_w, tg_y), cfg.tg_handle, font=font_tg, fill=top_color)
+    # Align visual top of block with margin
+    block_top = margin - bb1[1]
+    line1_x = (w - (bb1[2] - bb1[0])) // 2
+    draw.text((line1_x, block_top), line1, font=font_light_italic, fill=top_color)
 
-    # --- Bottom block: prompt text + /промпт label ---
-    # Layout (bottom → top):
-    #   margin → prompt text → gap → /промпт label (centered)
+    line2_x = (w - (bb2[2] - bb2[0])) // 2
+    line2_y = block_top + line1_h + top_line_gap - bb2[1]
+    draw.text((line2_x, line2_y), line2, font=font_semibold, fill=top_color)
+
+    # --- Bottom gradient ---
+    gradient = _make_gradient(w, h, gradient_height)
+    img = Image.alpha_composite(img, gradient)
+    draw = ImageDraw.Draw(img)
+
+    # --- Bottom block: prompt text + /PROMPT label ---
+    # Layout (bottom → top): margin → prompt text → gap → /PROMPT label (centered)
     prompt_lines = _wrap_text(prompt, font_prompt, text_area_w, draw)
     prompt_line_h = _line_height(font_prompt, draw)
     prompt_block_h = prompt_line_h * len(prompt_lines)
 
-    # Use actual bbox of "/промпт" for accurate height
-    label_bbox = draw.textbbox((0, 0), "/промпт", font=font_title)
+    label_bbox = draw.textbbox((0, 0), "/PROMPT", font=font_joystix)
     label_visual_h = label_bbox[3] - label_bbox[1]
     label_w = label_bbox[2] - label_bbox[0]
 
-    # Prompt text starts at prompt_top (drawing y)
     prompt_top = h - margin - prompt_block_h
-    # Visual bottom of /промпт = visual top of prompt text - gap
     label_visual_bottom = prompt_top - prompt_gap
     label_visual_top = label_visual_bottom - label_visual_h
-    # Adjust drawing y for bbox top offset
     label_y = label_visual_top - label_bbox[1]
-    # Center /промпт horizontally
     label_x = (w - label_w) // 2
 
-    draw.text(
-        (label_x, label_y),
-        "/промпт",
-        font=font_title,
-        fill=bot_color,
-    )
+    draw.text((label_x, label_y), "/PROMPT", font=font_joystix, fill=bot_color)
 
     # Draw prompt body (justified, 70% opacity)
     _draw_justified(
