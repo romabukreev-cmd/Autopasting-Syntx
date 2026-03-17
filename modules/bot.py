@@ -452,8 +452,8 @@ async def cb_clear(call: CallbackQuery):
 
 def kb_threads():
     return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📨 Рерайт из канала", callback_data="th:rewrite_start")],
         [InlineKeyboardButton(text="✍️ Сгенерировать посты на день", callback_data="th:run_format")],
-        [InlineKeyboardButton(text="📰 Новости из каналов (скоро)", callback_data="th:news_soon")],
         [InlineKeyboardButton(text="📋 Статус", callback_data="th:status")],
         [InlineKeyboardButton(text="← Назад", callback_data="menu:main")],
     ])
@@ -465,10 +465,17 @@ async def cb_menu_threads(call: CallbackQuery):
     await call.message.edit_text("Threads", reply_markup=kb_threads())
 
 
-@router.callback_query(F.data == "th:news_soon")
+@router.callback_query(F.data == "th:rewrite_start")
 @admin_only
-async def cb_threads_news_soon(call: CallbackQuery):
-    await call.answer("Будет доступно после настройки Telethon", show_alert=True)
+async def cb_threads_rewrite_start(call: CallbackQuery):
+    from modules.threads_poster import _WAITING_FORWARD
+    _WAITING_FORWARD.add(call.from_user.id)
+    await call.answer()
+    await call.message.answer(
+        "Перешли сообщение из канала.\n"
+        "Можно с фото или видео — скачаю и использую при публикации.\n\n"
+        "/cancel — отмена"
+    )
 
 
 @router.callback_query(F.data == "th:run_format")
@@ -637,6 +644,86 @@ async def handle_edit_text(message: Message):
     # Редактирование TG поста (старый код)
     if message.from_user.id in TG_WAITING_EDIT:
         await tg_apply_edit(message.bot, message.from_user.id, message.text)
+
+
+@router.message(F.forward_from_chat | F.forward_from | (F.photo) | (F.video) | (F.document))
+@admin_only
+async def handle_forwarded(message: Message):
+    """Обрабатывает пересланное сообщение для рерайта в Threads."""
+    from modules.threads_poster import _WAITING_FORWARD
+    if message.from_user.id not in _WAITING_FORWARD:
+        return
+    _WAITING_FORWARD.discard(message.from_user.id)
+
+    await message.answer("Получил, генерирую рерайт...")
+
+    # Определяем источник
+    source = ""
+    if message.forward_from_chat:
+        source = message.forward_from_chat.username or message.forward_from_chat.title or ""
+
+    # Текст сообщения
+    text = message.text or message.caption or ""
+
+    # Медиа
+    media_path = None
+    media_type = None
+
+    try:
+        if message.photo:
+            media_type = "photo"
+            file = await message.bot.get_file(message.photo[-1].file_id)
+            media_path = f"/tmp/th_fwd_{message.message_id}.jpg"
+            await message.bot.download_file(file.file_path, media_path)
+        elif message.video:
+            media_type = "video"
+            file = await message.bot.get_file(message.video.file_id)
+            media_path = f"/tmp/th_fwd_{message.message_id}.mp4"
+            await message.bot.download_file(file.file_path, media_path)
+    except Exception as e:
+        await message.answer(f"Не удалось скачать медиа: {e}\nПродолжаю без медиа.")
+        media_path = None
+        media_type = None
+
+    # Генерируем рерайт
+    from modules.threads_agent import rewrite_for_threads, save_post, upload_media
+    from modules.threads_poster import send_for_approval
+
+    try:
+        post_data = {"source": source, "text": text}
+        rewritten = await rewrite_for_threads(post_data)
+
+        # Загружаем медиа
+        media_url = None
+        if media_path:
+            media_url = await upload_media(media_path)
+            import os
+            try:
+                os.remove(media_path)
+            except Exception:
+                pass
+
+        post_id = await save_post(
+            type_="news",
+            source=source,
+            text=rewritten,
+            media_url=media_url,
+            media_type=media_type,
+        )
+        await send_for_approval(message.bot, message.chat.id, post_id)
+
+    except Exception as e:
+        await message.answer(f"Ошибка генерации: {e}")
+
+
+@router.message(Command("cancel"))
+@admin_only
+async def cmd_cancel(message: Message):
+    from modules.threads_poster import _WAITING_FORWARD, _WAITING_EDIT, _WAITING_TIME
+    _WAITING_FORWARD.discard(message.from_user.id)
+    _WAITING_EDIT.pop(message.from_user.id, None)
+    _WAITING_TIME.pop(message.from_user.id, None)
+    await message.answer("Отменено.")
 
 
 # --- Reply keyboard text handlers ---

@@ -28,6 +28,9 @@ _WAITING_EDIT: dict[int, int] = {}
 # Состояние выбора времени: {user_id: post_id}
 _WAITING_TIME: dict[int, int] = {}
 
+# Ожидание пересланного сообщения для рерайта
+_WAITING_FORWARD: set[int] = set()
+
 
 # ─────────────────────────────────────
 # Threads API
