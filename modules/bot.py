@@ -452,8 +452,8 @@ async def cb_clear(call: CallbackQuery):
 
 def kb_threads():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📰 Запустить новости сейчас", callback_data="th:run_news")],
         [InlineKeyboardButton(text="✍️ Сгенерировать посты на день", callback_data="th:run_format")],
+        [InlineKeyboardButton(text="📰 Новости из каналов (скоро)", callback_data="th:news_soon")],
         [InlineKeyboardButton(text="📋 Статус", callback_data="th:status")],
         [InlineKeyboardButton(text="← Назад", callback_data="menu:main")],
     ])
@@ -465,14 +465,10 @@ async def cb_menu_threads(call: CallbackQuery):
     await call.message.edit_text("Threads", reply_markup=kb_threads())
 
 
-@router.callback_query(F.data == "th:run_news")
+@router.callback_query(F.data == "th:news_soon")
 @admin_only
-async def cb_threads_run_news(call: CallbackQuery):
-    await call.answer("Запускаю мониторинг новостей...")
-    await call.message.answer("Читаю каналы и генерирую рерайт...")
-    from modules.threads_agent import run_news_job
-    import asyncio
-    asyncio.create_task(run_news_job(call.bot, call.message.chat.id))
+async def cb_threads_news_soon(call: CallbackQuery):
+    await call.answer("Будет доступно после настройки Telethon", show_alert=True)
 
 
 @router.callback_query(F.data == "th:run_format")

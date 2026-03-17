@@ -79,31 +79,13 @@ async def main():
         replace_existing=True,
     )
 
-    # Threads: мониторинг новостей (09:00 и 18:00 МСК)
-    from modules.threads_agent import run_news_job, run_format_job
-
-    async def _threads_news_job():
-        await run_news_job(bot, ADMIN_USER_ID)
+    # Threads: генерация форматных постов (08:30 МСК)
+    # Сценарий с новостями отключён — ждём Telethon
+    from modules.threads_agent import run_format_job
 
     async def _threads_format_job():
         await run_format_job(bot, ADMIN_USER_ID)
 
-    scheduler.add_job(
-        _threads_news_job,
-        trigger="cron",
-        hour=9, minute=0,
-        id="threads_news_morning",
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        _threads_news_job,
-        trigger="cron",
-        hour=18, minute=0,
-        id="threads_news_evening",
-        replace_existing=True,
-    )
-
-    # Threads: генерация форматных постов (08:30 МСК)
     scheduler.add_job(
         _threads_format_job,
         trigger="cron",
