@@ -113,64 +113,9 @@ SYSTEM_PROMPT_FORMAT = """Ты — контент-агент русскоязы�
 
 
 # ─────────────────────────────────────
-# Telethon: чтение каналов
+# Сценарий 1 (рерайт): пользователь пересылает сообщение боту вручную
+# Telethon не используется
 # ─────────────────────────────────────
-
-async def _get_telethon_client() -> TelegramClient:
-    client = TelegramClient(TELETHON_SESSION, TELETHON_API_ID, TELETHON_API_HASH)
-    await client.start()
-    return client
-
-
-async def fetch_channel_posts(channel: str, hours: int = THREADS_LOOKBACK_HOURS) -> list[dict]:
-    """Читает посты из канала за последние N часов."""
-    posts = []
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
-
-    try:
-        client = await _get_telethon_client()
-        async with client:
-            async for msg in client.iter_messages(channel, limit=50):
-                if not msg.date:
-                    continue
-                msg_date = msg.date.replace(tzinfo=timezone.utc) if msg.date.tzinfo is None else msg.date
-                if msg_date < cutoff:
-                    break
-
-                text = msg.text or msg.caption or ""
-                if not text or len(text) < 50:
-                    continue
-
-                post = {
-                    "source": channel,
-                    "text": text,
-                    "media_type": None,
-                    "media_path": None,
-                    "date": msg_date,
-                }
-
-                # Скачиваем медиа если есть
-                if msg.media:
-                    if isinstance(msg.media, MessageMediaPhoto):
-                        post["media_type"] = "photo"
-                    elif isinstance(msg.media, MessageMediaDocument):
-                        if msg.media.document.mime_type.startswith("video"):
-                            post["media_type"] = "video"
-
-                    if post["media_type"]:
-                        try:
-                            path = await client.download_media(msg.media, file=f"/tmp/threads_media_{msg.id}")
-                            post["media_path"] = path
-                        except Exception as e:
-                            logger.warning(f"Не удалось скачать медиа: {e}")
-
-                posts.append(post)
-
-    except Exception as e:
-        logger.error(f"Ошибка чтения канала @{channel}: {e}")
-
-    logger.info(f"Канал @{channel}: найдено {len(posts)} постов за {hours}ч")
-    return posts
 
 
 # ─────────────────────────────────────
