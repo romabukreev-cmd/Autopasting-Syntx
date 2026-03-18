@@ -296,7 +296,7 @@ async def publish_due_pins(bot, admin_chat_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT * FROM pins_schedule WHERE status = 'pending' AND scheduled_at <= ?",
+            "SELECT * FROM pins_schedule WHERE status = 'pending' AND scheduled_at <= ? LIMIT 1",
             (now,),
         ) as cur:
             due = await cur.fetchall()
