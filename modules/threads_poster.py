@@ -65,7 +65,7 @@ async def publish_to_threads(text: str, media_url: str = None, media_type: str =
         logger.info(f"[Threads] Контейнер создан: {container_id}")
 
     # Шаг 2: ждём 35 секунд (требование API)
-    await asyncio.sleep(35)
+    await _wait_container_ready(container_id)
 
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(
@@ -84,6 +84,36 @@ async def publish_to_threads(text: str, media_url: str = None, media_type: str =
 # ─────────────────────────────────────
 # Клавиатуры апрува
 # ─────────────────────────────────────
+
+async def _wait_container_ready(container_id: str, timeout_sec: int = 180, poll_sec: int = 5):
+    """Poll Threads container status until FINISHED or fail/timeout."""
+    deadline = asyncio.get_running_loop().time() + timeout_sec
+
+    while True:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                f"{THREADS_API_BASE}/{container_id}",
+                params={
+                    "fields": "status,error_message",
+                    "access_token": THREADS_ACCESS_TOKEN,
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+        status = str(data.get("status", "")).upper()
+        if status == "FINISHED":
+            return
+
+        if status in {"ERROR", "FAILED", "EXPIRED"}:
+            err = data.get("error_message") or "unknown error"
+            raise RuntimeError(f"Threads container {container_id} status={status}: {err}")
+
+        if asyncio.get_running_loop().time() >= deadline:
+            raise TimeoutError(f"Threads container {container_id} not ready in {timeout_sec}s (status={status})")
+
+        await asyncio.sleep(poll_sec)
+
 
 def kb_approval(post_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
