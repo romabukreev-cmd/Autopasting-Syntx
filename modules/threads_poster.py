@@ -9,8 +9,8 @@ Threads Poster — публикация в Threads API + апрув-флоу ч�
 5. При «Позже» → спрашиваем время → APScheduler ставит в очередь
 """
 
+import asyncio
 import logging
-import time
 from datetime import datetime, timezone
 
 import aiosqlite
@@ -65,7 +65,7 @@ async def publish_to_threads(text: str, media_url: str = None, media_type: str =
         logger.info(f"[Threads] Контейнер создан: {container_id}")
 
     # Шаг 2: ждём 35 секунд (требование API)
-    time.sleep(35)
+    await asyncio.sleep(35)
 
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(
