@@ -119,27 +119,43 @@ async def setup_posting_schedule(bot, chat_id: int):
         else:
             start_date = date.today()
 
-        posting_hours = list(range(9, 24)) + [0]  # 09:00–00:59 MSK
+        now_local = datetime.now(tz)
+        # Working window: 10:00-23:59 MSK
+        posting_hours = list(range(10, 24))
         schedule_entries = []
         idx = 0
+        day_offset = 0
+        carry = 0
 
-        for day_offset, count in enumerate(distribution):
+        while idx < len(rows):
+            planned = distribution[day_offset] if day_offset < len(distribution) else IMAGES_PER_DAY_MAX
+            count = min(planned + carry, len(rows) - idx)
             day = start_date + timedelta(days=day_offset)
-            times = sorted(random.sample(posting_hours, min(count, len(posting_hours))))
-            for hour in times:
-                if idx >= len(rows):
-                    break
-                item = rows[idx]
-                dt = tz.localize(datetime(day.year, day.month, day.day, hour, random.randint(0, 59)))
-                schedule_entries.append({
-                    "generation_file_id": item["id"],
-                    "ref_id": item["ref_id"],
-                    "gdrive_file_id": item["gdrive_file_id"],
-                    "category": item["category"],
-                    "board_id": PINTEREST_BOARD_ID,
-                    "scheduled_at": dt.isoformat(),
-                })
-                idx += 1
+            available_hours = posting_hours[:]
+
+            # If scheduling starts today, skip hours already passed to avoid instant backfill.
+            if day == now_local.date():
+                available_hours = [h for h in available_hours if h > now_local.hour]
+
+            slots_count = min(count, len(available_hours))
+            carry = count - slots_count
+
+            if slots_count > 0:
+                times = sorted(random.sample(available_hours, slots_count))
+                for hour in times:
+                    item = rows[idx]
+                    dt = tz.localize(datetime(day.year, day.month, day.day, hour, random.randint(0, 59)))
+                    schedule_entries.append({
+                        "generation_file_id": item["id"],
+                        "ref_id": item["ref_id"],
+                        "gdrive_file_id": item["gdrive_file_id"],
+                        "category": item["category"],
+                        "board_id": PINTEREST_BOARD_ID,
+                        "scheduled_at": dt.isoformat(),
+                    })
+                    idx += 1
+
+            day_offset += 1
 
         async with aiosqlite.connect(DB_PATH) as db:
             for entry in schedule_entries:
@@ -244,8 +260,8 @@ async def _ensure_today_quota(now: str):
         ) as cur:
             published_today = (await cur.fetchone())[0]
         async with db.execute(
-            "SELECT COUNT(*) FROM pins_schedule WHERE status = 'pending' AND scheduled_at <= ?",
-            (today_end,),
+            "SELECT COUNT(*) FROM pins_schedule WHERE status = 'pending' AND scheduled_at >= ? AND scheduled_at <= ?",
+            (today_start, today_end),
         ) as cur:
             pending_today = (await cur.fetchone())[0]
 
@@ -285,6 +301,10 @@ async def publish_due_pins(bot, admin_chat_id: int):
             (today_start,),
         ) as cur:
             published_today = (await cur.fetchone())[0]
+    # Soft daily cap by schedule policy (e.g., 10/day). Hard limit remains a safety fuse.
+    if published_today >= IMAGES_PER_DAY_MAX:
+        await _check_posting_completion(bot, admin_chat_id)
+        return
     if published_today >= DAILY_PIN_HARD_LIMIT:
         logger.warning(f"Daily hard limit {DAILY_PIN_HARD_LIMIT} reached ({published_today} published). Skipping tick.")
         await _check_posting_completion(bot, admin_chat_id)
@@ -296,7 +316,8 @@ async def publish_due_pins(bot, admin_chat_id: int):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT * FROM pins_schedule WHERE status = 'pending' AND scheduled_at <= ? LIMIT 1",
+            "SELECT * FROM pins_schedule WHERE status = 'pending' AND scheduled_at <= ? "
+            "ORDER BY scheduled_at ASC LIMIT 1",
             (now,),
         ) as cur:
             due = await cur.fetchall()
