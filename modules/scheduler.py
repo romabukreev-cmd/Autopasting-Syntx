@@ -41,6 +41,8 @@ from modules import drive, publisher, sheets
 
 logger = logging.getLogger(__name__)
 tz = pytz.timezone(TIMEZONE)
+PIN_POST_HOUR_START = 10
+PIN_POST_HOUR_END_EXCLUSIVE = 24
 
 
 def _distribute_pins(total: int, days: int, min_per_day: int, max_per_day: int) -> list[int]:
@@ -54,6 +56,71 @@ def _distribute_pins(total: int, days: int, min_per_day: int, max_per_day: int) 
         elif remainder < 0 and result[i % days] > min_per_day:
             result[i % days] -= 1
     return result
+
+
+def _in_pin_window(dt_local: datetime) -> bool:
+    return PIN_POST_HOUR_START <= dt_local.hour < PIN_POST_HOUR_END_EXCLUSIVE
+
+
+def _pin_window_start(dt_local: datetime) -> datetime:
+    return dt_local.replace(hour=PIN_POST_HOUR_START, minute=0, second=0, microsecond=0)
+
+
+def _pin_window_end(dt_local: datetime) -> datetime:
+    return dt_local.replace(hour=23, minute=59, second=59, microsecond=0)
+
+
+def _local_day_utc_bounds(dt_local: datetime) -> tuple[str, str]:
+    day_start_local = dt_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    next_day_start_local = day_start_local + timedelta(days=1)
+    return day_start_local.astimezone(pytz.UTC).isoformat(), next_day_start_local.astimezone(pytz.UTC).isoformat()
+
+
+async def _count_published_today(db: aiosqlite.Connection, now_local: datetime) -> int:
+    # published_at is stored in UTC in publisher.py; count by local-day bounds converted to UTC
+    day_start_utc, next_day_start_utc = _local_day_utc_bounds(now_local)
+    async with db.execute(
+        "SELECT COUNT(*) FROM pins_schedule "
+        "WHERE status = 'published' AND published_at >= ? AND published_at < ?",
+        (day_start_utc, next_day_start_utc),
+    ) as cur:
+        return (await cur.fetchone())[0]
+
+
+async def _defer_due_pins_to_next_window(now_local: datetime) -> int:
+    """If we're outside pin window, move already-due pending pins into next 10:00-23:59 window."""
+    now_iso = now_local.isoformat()
+    if now_local.hour < PIN_POST_HOUR_START:
+        window_start = _pin_window_start(now_local)
+    else:
+        tomorrow = now_local + timedelta(days=1)
+        window_start = _pin_window_start(tomorrow)
+    window_end = _pin_window_end(window_start)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT id FROM pins_schedule WHERE status = 'pending' AND scheduled_at <= ? ORDER BY scheduled_at ASC",
+            (now_iso,),
+        ) as cur:
+            due_ids = [row[0] for row in await cur.fetchall()]
+
+        if not due_ids:
+            return 0
+
+        remaining_seconds = max(0, (window_end - window_start).total_seconds())
+        interval = max(30 * 60, remaining_seconds / max(len(due_ids), 1))
+        for i, pin_id in enumerate(due_ids):
+            slot_dt = window_start + timedelta(seconds=i * interval)
+            await db.execute(
+                "UPDATE pins_schedule SET scheduled_at = ? WHERE id = ?",
+                (slot_dt.isoformat(), pin_id),
+            )
+        await db.commit()
+        logger.warning(
+            f"Deferred {len(due_ids)} due pins to next window starting {window_start.isoformat()} "
+            f"(outside {PIN_POST_HOUR_START}:00-23:59)."
+        )
+        return len(due_ids)
 
 
 def _in_tg_window(hour: int) -> bool:
@@ -246,19 +313,18 @@ async def setup_test_schedule(bot, chat_id: int):
         await set_state(posting_status="idle")
 
 
-async def _ensure_today_quota(now: str):
+async def _ensure_today_quota():
     """Accelerate enough future pins to fill today's quota (IMAGES_PER_DAY_MIN)."""
     now_dt = datetime.now(tz)
-    today_end_dt = now_dt.replace(hour=23, minute=59, second=59, microsecond=0)
+    if not _in_pin_window(now_dt):
+        return
+
+    today_end_dt = _pin_window_end(now_dt)
     today_end = today_end_dt.isoformat()
     today_start = now_dt.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
 
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute(
-            "SELECT COUNT(*) FROM pins_schedule WHERE status = 'published' AND published_at >= ?",
-            (today_start,),
-        ) as cur:
-            published_today = (await cur.fetchone())[0]
+        published_today = await _count_published_today(db, now_dt)
         async with db.execute(
             "SELECT COUNT(*) FROM pins_schedule WHERE status = 'pending' AND scheduled_at >= ? AND scheduled_at <= ?",
             (today_start, today_end),
@@ -292,15 +358,17 @@ async def publish_due_pins(bot, admin_chat_id: int):
     """Called by APScheduler every minute. Publishes pins whose scheduled_at has passed."""
     now_dt = datetime.now(tz)
     now = now_dt.isoformat()
-    today_start = now_dt.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+
+    if not _in_pin_window(now_dt):
+        moved = await _defer_due_pins_to_next_window(now_dt)
+        if moved:
+            logger.info(f"Moved {moved} due pins to next allowed window.")
+        await _check_posting_completion(bot, admin_chat_id)
+        return
 
     # Жёсткий лимит: не более DAILY_PIN_HARD_LIMIT пинов в сутки
     async with aiosqlite.connect(DB_PATH) as db:
-        async with db.execute(
-            "SELECT COUNT(*) FROM pins_schedule WHERE status = 'published' AND published_at >= ?",
-            (today_start,),
-        ) as cur:
-            published_today = (await cur.fetchone())[0]
+        published_today = await _count_published_today(db, now_dt)
     # Soft daily cap by schedule policy (e.g., 10/day). Hard limit remains a safety fuse.
     if published_today >= IMAGES_PER_DAY_MAX:
         await _check_posting_completion(bot, admin_chat_id)
@@ -311,7 +379,7 @@ async def publish_due_pins(bot, admin_chat_id: int):
         return
 
     # Проверяем квоту в начале каждого тика — если день пустой, заполним
-    await _ensure_today_quota(now)
+    await _ensure_today_quota()
 
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
