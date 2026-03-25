@@ -69,31 +69,6 @@ async def main():
         replace_existing=True,
     )
 
-    # Threads: публикация запланированных постов
-    from modules.threads_poster import publish_scheduled_threads_job
-    scheduler.add_job(
-        publish_scheduled_threads_job,
-        trigger="interval",
-        minutes=1,
-        id="publish_scheduled_threads",
-        replace_existing=True,
-    )
-
-    # Threads: генерация форматных постов (08:30 МСК)
-    # Сценарий с новостями отключён — ждём Telethon
-    from modules.threads_agent import run_format_job
-
-    async def _threads_format_job():
-        await run_format_job(bot, ADMIN_USER_ID)
-
-    scheduler.add_job(
-        _threads_format_job,
-        trigger="cron",
-        hour=8, minute=30,
-        id="threads_format_daily",
-        replace_existing=True,
-    )
-
     scheduler.start()
 
     logger.info("Bot started")

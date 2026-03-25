@@ -6,7 +6,7 @@
 ## Стек
 - Python, aiogram 3.x (async Telegram bot)
 - APScheduler + SQLite (aiosqlite)
-- OpenRouter API (GPT-4o, SeeDream 4.5, Gemini NanaBana)
+- OpenRouter API (GPT-4o, Gemini NanaBana)
 - Google Drive через rclone (`gdrive:` remote)
 - Google Sheets (категории, board_id для Pinterest)
 - Make.com (публикация пинов через webhook)
@@ -19,11 +19,11 @@
 ```
 Референсы (Drive) → Анализ (GPT-4o) → промпты в DB
                                        ↓
-                         Генерация (SeeDream + NanaBana)
+                         Генерация (Gemini NanaBana)
                                        ↓
                          Overlay (Pillow: текст + CTA)
                                        ↓
-                         Загрузка на Drive (seedream_pin/ + nanobana_pin/)
+                         Загрузка на Drive (nanobana_pin/)
                                        ↓
                          Расписание (APScheduler → webhook → Make.com → Pinterest)
 ```
@@ -32,8 +32,7 @@
 | Переменная | Модель | Назначение |
 |---|---|---|
 | `MODEL_ANALYZER` | `openai/gpt-4o` | Анализ референсов, генерация промптов |
-| `MODEL_IMAGE_1` | `bytedance-seed/seedream-4.5` | Генерация изображений |
-| `MODEL_IMAGE_2` | `google/gemini-3.1-flash-image-preview` | Генерация изображений |
+| `MODEL_IMAGE` | `google/gemini-3.1-flash-image-preview` | Генерация изображений |
 
 Все вызовы через `https://openrouter.ai/api/v1/chat/completions` с `modalities: ["image", "text"]` и `image_config: {"aspect_ratio": "2:3"}`.
 
@@ -86,10 +85,8 @@ PROJECTS/Автопостинг Syntx/Pinterest/
 └── База генераций/
     └── week_{N}/
         └── [категория]/
-            ├── seedream/           ← чистая генерация SeeDream
-            ├── seedream_pin/       ← с overlay (идут в постинг)
-            ├── nanobana/           ← чистая генерация NanaBana
-            └── nanobana_pin/       ← с overlay (идут в постинг)
+            ├── nanobana/           ← чистая генерация (для TG-постинга)
+            └── nanobana_pin/       ← с overlay (идут в Pinterest)
 ```
 
 ---
@@ -111,6 +108,13 @@ SSH-ключ: `C:/Users/Роман/.ssh/id_ed25519`
 ---
 
 ## Правила работы с кодом
+
+### Деплой — строгий порядок
+1. Изменения вносить **только локально**
+2. `git add` + `git commit` + `git push`
+3. Только после пуша — деплой на сервер: `git pull && sudo systemctl restart syntx`
+
+**Никогда не редактировать файлы напрямую на сервере.**
 
 ### Можно
 - Менять модели через `config.py` — это единственное место

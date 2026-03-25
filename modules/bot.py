@@ -6,7 +6,7 @@ from aiogram.filters import Command
 from aiogram.types import (
     Message, CallbackQuery,
     InlineKeyboardMarkup, InlineKeyboardButton,
-    ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove,
+    ReplyKeyboardMarkup, KeyboardButton,
 )
 
 from config import ADMIN_USER_ID
@@ -38,7 +38,6 @@ def kb_main():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Pinterest", callback_data="menu:pinterest")],
         [InlineKeyboardButton(text="Telegram", callback_data="menu:telegram")],
-        [InlineKeyboardButton(text="Threads", callback_data="menu:threads")],
     ])
 
 
@@ -72,7 +71,6 @@ def kb_reply_main():
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="Pinterest"), KeyboardButton(text="Telegram")],
-            [KeyboardButton(text="Threads")],
         ],
         resize_keyboard=True,
         persistent=True,
@@ -394,13 +392,32 @@ async def cmd_retry(message: Message):
     asyncio.create_task(run_retry(message.bot, message.chat.id))
 
 
-# --- pin:clear — wipe everything (Drive + all DB tables + statuses) ---
+# --- pin:clear — confirmation + wipe everything ---
+
+def kb_clear_confirm():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="Да, удалить всё", callback_data="pin:clear_confirm"),
+            InlineKeyboardButton(text="Отмена", callback_data="menu:pinterest"),
+        ],
+    ])
+
 
 @router.callback_query(F.data == "pin:clear")
 @admin_only
 async def cb_clear(call: CallbackQuery):
+    await call.answer()
+    await call.message.edit_text(
+        "Удалить всё?\n\nБудут удалены: все референсы, генерации, расписание постинга и папка на Drive.\nОтменить нельзя.",
+        reply_markup=kb_clear_confirm(),
+    )
+
+
+@router.callback_query(F.data == "pin:clear_confirm")
+@admin_only
+async def cb_clear_confirm(call: CallbackQuery):
     await call.answer("Очищаю...", show_alert=False)
-    await call.message.answer("Очищаю всё: Drive, базу, рефы, промпты, расписание...")
+    await call.message.edit_text("Очищаю...")
     import aiosqlite
     from config import DB_PATH, DRIVE_BASE_PATH, DRIVE_FOLDER_GENS
     from modules import drive
@@ -438,286 +455,13 @@ async def cb_clear(call: CallbackQuery):
         await call.message.answer(f"Ошибка при очистке: {e}")
 
 
-# --- TG post edit: catch admin's free text when in edit mode ---
-
-# ─────────────────────────────────────
-# Threads меню
-# ─────────────────────────────────────
-
-def kb_threads():
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📨 Рерайт из канала", callback_data="th:rewrite_start")],
-        [InlineKeyboardButton(text="✍️ Сгенерировать посты на день", callback_data="th:run_format")],
-        [InlineKeyboardButton(text="📋 Статус", callback_data="th:status")],
-        [InlineKeyboardButton(text="← Назад", callback_data="menu:main")],
-    ])
-
-
-@router.callback_query(F.data == "menu:threads")
-@admin_only
-async def cb_menu_threads(call: CallbackQuery):
-    await call.message.edit_text("Threads", reply_markup=kb_threads())
-
-
-@router.callback_query(F.data == "th:rewrite_start")
-@admin_only
-async def cb_threads_rewrite_start(call: CallbackQuery):
-    from modules.threads_poster import _WAITING_FORWARD
-    _WAITING_FORWARD.add(call.from_user.id)
-    await call.answer()
-    await call.message.answer(
-        "Перешли сообщение из канала.\n"
-        "Можно с фото или видео — скачаю и использую при публикации.\n\n"
-        "/cancel — отмена"
-    )
-
-
-@router.callback_query(F.data == "th:run_format")
-@admin_only
-async def cb_threads_run_format(call: CallbackQuery):
-    await call.answer("Генерирую посты по расписанию...")
-    await call.message.answer("Генерирую контент на сегодня...")
-    from modules.threads_agent import run_format_job
-    import asyncio
-    asyncio.create_task(run_format_job(call.bot, call.message.chat.id))
-
-
-@router.callback_query(F.data == "th:status")
-@admin_only
-async def cb_threads_status(call: CallbackQuery):
-    import aiosqlite
-    from config import DB_PATH
-    async with aiosqlite.connect(DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute("""
-            SELECT
-                SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) as pending,
-                SUM(CASE WHEN status='sent' THEN 1 ELSE 0 END) as sent,
-                SUM(CASE WHEN status='scheduled' THEN 1 ELSE 0 END) as scheduled,
-                SUM(CASE WHEN status='published' THEN 1 ELSE 0 END) as published,
-                SUM(CASE WHEN status='cancelled' THEN 1 ELSE 0 END) as cancelled
-            FROM threads_posts
-        """) as cur:
-            row = await cur.fetchone()
-    await call.answer()
-    await call.message.answer(
-        f"Threads — статус\n\n"
-        f"На апруве: {row['sent'] or 0}\n"
-        f"Запланировано: {row['scheduled'] or 0}\n"
-        f"Опубликовано: {row['published'] or 0}\n"
-        f"Отменено: {row['cancelled'] or 0}"
-    )
-
-
-# ─────────────────────────────────────
-# Threads апрув-флоу
-# ─────────────────────────────────────
-
-@router.callback_query(F.data.startswith("th:approve:"))
-@admin_only
-async def cb_th_approve(call: CallbackQuery):
-    post_id = int(call.data.split(":")[2])
-    from modules.threads_poster import approve_post
-    await call.answer("Публикую...")
-    try:
-        ok = await approve_post(call.bot, post_id)
-        if ok:
-            await call.message.edit_reply_markup(reply_markup=None)
-            await call.message.answer("✅ Опубликовано в Threads")
-        else:
-            await call.answer("Пост уже обработан", show_alert=True)
-    except Exception as e:
-        await call.answer(f"Ошибка: {e}", show_alert=True)
-
-
-@router.callback_query(F.data.startswith("th:cancel:"))
-@admin_only
-async def cb_th_cancel(call: CallbackQuery):
-    post_id = int(call.data.split(":")[2])
-    from modules.threads_poster import cancel_post
-    await cancel_post(post_id)
-    await call.message.edit_reply_markup(reply_markup=None)
-    await call.answer("Отменено")
-
-
-@router.callback_query(F.data.startswith("th:edit:"))
-@admin_only
-async def cb_th_edit(call: CallbackQuery):
-    post_id = int(call.data.split(":")[2])
-    from modules.threads_poster import start_edit, get_post_text
-    start_edit(call.from_user.id, post_id)
-    text = await get_post_text(post_id)
-    await call.answer()
-    await call.message.edit_reply_markup(reply_markup=None)
-    await call.message.answer(
-        f"Текущий текст:\n\n{text}\n\nОтправь отредактированную версию:"
-    )
-
-
-@router.callback_query(F.data.startswith("th:schedule:"))
-@admin_only
-async def cb_th_schedule(call: CallbackQuery):
-    post_id = int(call.data.split(":")[2])
-    from modules.threads_poster import kb_time_picker
-    await call.message.edit_reply_markup(reply_markup=kb_time_picker(post_id))
-    await call.answer()
-
-
-@router.callback_query(F.data.startswith("th:back:"))
-@admin_only
-async def cb_th_back(call: CallbackQuery):
-    post_id = int(call.data.split(":")[2])
-    from modules.threads_poster import kb_approval
-    await call.message.edit_reply_markup(reply_markup=kb_approval(post_id))
-    await call.answer()
-
-
-@router.callback_query(F.data.startswith("th:time:"))
-@admin_only
-async def cb_th_time(call: CallbackQuery):
-    # формат: th:time:{post_id}:{hour}:{minute}
-    parts = call.data.split(":")
-    post_id = int(parts[2])
-    hour = int(parts[3])
-    minute = int(parts[4])
-
-    from modules.threads_poster import schedule_post
-    from datetime import datetime, timezone, timedelta
-
-    now_msk = datetime.now(timezone.utc) + timedelta(hours=3)
-    scheduled_msk = now_msk.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    if scheduled_msk <= now_msk:
-        scheduled_msk += timedelta(days=1)
-    scheduled_utc = scheduled_msk - timedelta(hours=3)
-
-    await schedule_post(post_id, scheduled_utc)
-    await call.message.edit_reply_markup(reply_markup=None)
-    await call.answer()
-    await call.message.answer(f"🕐 Запланировано на {scheduled_msk.strftime('%d.%m %H:%M')} МСК")
-
-
-@router.callback_query(F.data.startswith("th:time_custom:"))
-@admin_only
-async def cb_th_time_custom(call: CallbackQuery):
-    post_id = int(call.data.split(":")[2])
-    from modules.threads_poster import _WAITING_TIME
-    _WAITING_TIME[call.from_user.id] = post_id
-    await call.answer()
-    await call.message.edit_reply_markup(reply_markup=None)
-    await call.message.answer("Введи время в формате ЧЧ:ММ (по МСК):")
-
-
-@router.message(F.text & ~F.text.in_({"Pinterest", "Telegram", "Threads"}))
+@router.message(F.text & ~F.text.in_({"Pinterest", "Telegram"}))
 @admin_only
 async def handle_edit_text(message: Message):
-    from modules.threads_poster import _WAITING_EDIT, _WAITING_TIME, apply_edit, schedule_post
     from modules.tg_poster import _WAITING_EDIT as TG_WAITING_EDIT, apply_edit as tg_apply_edit
 
-    # Редактирование Threads поста
-    if message.from_user.id in _WAITING_EDIT:
-        await apply_edit(message.bot, message.from_user.id, message.chat.id, message.text)
-        return
-
-    # Ввод времени для Threads поста
-    if message.from_user.id in _WAITING_TIME:
-        post_id = _WAITING_TIME.pop(message.from_user.id)
-        try:
-            from datetime import datetime, timezone, timedelta
-            h, m = map(int, message.text.strip().split(":"))
-            now_msk = datetime.now(timezone.utc) + timedelta(hours=3)
-            scheduled_msk = now_msk.replace(hour=h, minute=m, second=0, microsecond=0)
-            if scheduled_msk <= now_msk:
-                scheduled_msk += timedelta(days=1)
-            scheduled_utc = scheduled_msk - timedelta(hours=3)
-            await schedule_post(post_id, scheduled_utc)
-            await message.answer(f"🕐 Запланировано на {scheduled_msk.strftime('%d.%m %H:%M')} МСК")
-        except Exception:
-            await message.answer("Неверный формат. Используй ЧЧ:ММ, например 19:30")
-        return
-
-    # Редактирование TG поста (старый код)
     if message.from_user.id in TG_WAITING_EDIT:
         await tg_apply_edit(message.bot, message.from_user.id, message.text)
-
-
-@router.message(F.forward_from_chat | F.forward_from | (F.photo) | (F.video) | (F.document))
-@admin_only
-async def handle_forwarded(message: Message):
-    """Обрабатывает пересланное сообщение для рерайта в Threads."""
-    from modules.threads_poster import _WAITING_FORWARD
-    if message.from_user.id not in _WAITING_FORWARD:
-        return
-    _WAITING_FORWARD.discard(message.from_user.id)
-
-    await message.answer("Получил, генерирую рерайт...")
-
-    # Определяем источник
-    source = ""
-    if message.forward_from_chat:
-        source = message.forward_from_chat.username or message.forward_from_chat.title or ""
-
-    # Текст сообщения
-    text = message.text or message.caption or ""
-
-    # Медиа
-    media_path = None
-    media_type = None
-
-    try:
-        if message.photo:
-            media_type = "photo"
-            file = await message.bot.get_file(message.photo[-1].file_id)
-            media_path = f"/tmp/th_fwd_{message.message_id}.jpg"
-            await message.bot.download_file(file.file_path, media_path)
-        elif message.video:
-            media_type = "video"
-            file = await message.bot.get_file(message.video.file_id)
-            media_path = f"/tmp/th_fwd_{message.message_id}.mp4"
-            await message.bot.download_file(file.file_path, media_path)
-    except Exception as e:
-        await message.answer(f"Не удалось скачать медиа: {e}\nПродолжаю без медиа.")
-        media_path = None
-        media_type = None
-
-    # Генерируем рерайт
-    from modules.threads_agent import rewrite_for_threads, save_post, upload_media
-    from modules.threads_poster import send_for_approval
-
-    try:
-        post_data = {"source": source, "text": text}
-        rewritten = await rewrite_for_threads(post_data)
-
-        # Загружаем медиа
-        media_url = None
-        if media_path:
-            media_url = await upload_media(media_path)
-            import os
-            try:
-                os.remove(media_path)
-            except Exception:
-                pass
-
-        post_id = await save_post(
-            type_="news",
-            source=source,
-            text=rewritten,
-            media_url=media_url,
-            media_type=media_type,
-        )
-        await send_for_approval(message.bot, message.chat.id, post_id)
-
-    except Exception as e:
-        await message.answer(f"Ошибка генерации: {e}")
-
-
-@router.message(Command("cancel"))
-@admin_only
-async def cmd_cancel(message: Message):
-    from modules.threads_poster import _WAITING_FORWARD, _WAITING_EDIT, _WAITING_TIME
-    _WAITING_FORWARD.discard(message.from_user.id)
-    _WAITING_EDIT.pop(message.from_user.id, None)
-    _WAITING_TIME.pop(message.from_user.id, None)
-    await message.answer("Отменено.")
 
 
 # --- Reply keyboard text handlers ---
@@ -734,11 +478,5 @@ async def reply_pinterest(message: Message):
 @admin_only
 async def reply_telegram(message: Message):
     await _show_menu(message.bot, message.chat.id, "Telegram", kb_telegram())
-
-
-@router.message(F.text == "Threads")
-@admin_only
-async def reply_threads(message: Message):
-    await _show_menu(message.bot, message.chat.id, "Threads", kb_threads())
 
 

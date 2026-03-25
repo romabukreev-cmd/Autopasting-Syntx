@@ -32,7 +32,7 @@ async def _fetch_csv(url: str) -> str:
         async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
             if resp.status != 200:
                 raise RuntimeError(
-                    f"Sheets CSV fetch failed (sheet={sheet_name}): {resp.status}. "
+                    f"Sheets CSV fetch failed ({resp.status}): {url}. "
                     f"Убедись что таблица открыта для просмотра."
                 )
             return await resp.text()
