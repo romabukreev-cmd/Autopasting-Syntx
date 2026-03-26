@@ -471,7 +471,9 @@ async def publish_due_tg_posts(bot):
             prompts = json_loads_safe(row["prompts"])
             p = prompts[0] if prompts else {}
             cat = row["category"].lower()
-            if "нейрофото" in cat:
+            if "товар" in cat:
+                prompt_text = p.get("full", "")
+            elif "нейрофото" in cat:
                 # Show version without glasses for public TG post
                 prompt_text = p.get("full_no_glasses") or p.get("full", "")
             else:

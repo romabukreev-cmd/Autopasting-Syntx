@@ -52,6 +52,10 @@ def _is_3d_text(cat: str) -> bool:
     return "3d" in c or "3д" in c
 
 
+def _is_product(cat: str) -> bool:
+    return "товар" in cat.lower()
+
+
 async def _fetch_random_images(folder_path: str, n: int) -> list[bytes]:
     """Download n unique random images from a Drive folder. Returns up to n items."""
     try:
@@ -229,7 +233,11 @@ async def _process_one(gen_id: int, item: dict, week: int) -> bool:
 
     # Determine prompt for generation, text for overlay, aspect ratio, and overlay type
     aspect_ratio = "2:3"
-    if _is_neurophoto(category):
+    if _is_product(category):
+        overlay_type = "neurophoto"
+        gen_prompt = item.get("full", "")
+        overlay_text = item.get("full", "")
+    elif _is_neurophoto(category):
         overlay_type = "neurophoto"
         gen_prompt = item.get("full_glasses") or item.get("full", "")
         overlay_text = item.get("full_no_glasses") or item.get("full", "")

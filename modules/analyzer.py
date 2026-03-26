@@ -40,6 +40,9 @@ def _is_3d_with_prompt(cat: str) -> bool:
     c = cat.lower()
     return ("3d" in c or "3д" in c) and "без" not in c
 
+def _is_product(cat: str) -> bool:
+    return "товар" in cat.lower()
+
 # ── System prompts ─────────────────────────────────────────────────────────────
 
 _PROMPT_OCR = """Your only task: read the generation prompt text printed on this image.
@@ -115,6 +118,27 @@ Your tasks:
 The output language must match the input prompt language.
 Return JSON only, no markdown:
 {"full": "<adapted prompt>"}"""
+
+_PROMPT_ANALYZE_PRODUCT = """Ты анализируешь изображение товара, сгенерированное нейросетью.
+
+Твоя задача — написать ПОДРОБНЫЙ промпт на РУССКОМ языке (100-200 слов), который позволит воспроизвести это изображение максимально точно.
+
+Проанализируй и опиши каждую деталь:
+1. Товар: что именно изображено (косметика, еда, электроника, одежда и т.д.), форма, размер, расположение.
+2. Материалы и текстуры: поверхность товара, упаковка, этикетки (без конкретных брендов — заменяй на "стильная этикетка", "минималистичный логотип" и т.д.).
+3. Окружение и композиция: фон, поверхность, декоративные элементы вокруг товара (цветы, ткани, капли воды, листья и т.д.).
+4. Освещение: направление, мягкость, цветовая температура, блики, тени.
+5. Цветовая палитра: точные оттенки основных цветов.
+6. Стиль съёмки: рекламная, lifestyle, flat lay, макро и т.д.
+7. Настроение и атмосфера: премиальность, минимализм, уют, свежесть и т.д.
+
+Правила:
+- Пиши на русском языке.
+- НЕ упоминай конкретные бренды или названия — описывай визуально.
+- Промпт должен быть готов к использованию: один абзац, без нумерации.
+
+Return JSON only, no markdown:
+{"prompt": "<подробный промпт на русском>"}"""
 
 # ── Analysis helpers ───────────────────────────────────────────────────────────
 
@@ -202,9 +226,43 @@ async def _adapt_3d_prompt(base_prompt: str) -> dict:
     return json.loads(resp.choices[0].message.content)
 
 
+async def _analyze_product_image(image_data: bytes) -> dict:
+    """GPT-4o analyzes product image and writes a generation prompt in Russian."""
+    b64 = base64.b64encode(image_data).decode()
+    for use_json_mode in (True, False):
+        kwargs = dict(
+            model=MODEL_ANALYZER,
+            messages=[{"role": "user", "content": [
+                {"type": "text", "text": _PROMPT_ANALYZE_PRODUCT},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+            ]}],
+            max_tokens=2000,
+        )
+        if use_json_mode:
+            kwargs["response_format"] = {"type": "json_object"}
+        resp = await client.chat.completions.create(**kwargs)
+        content = resp.choices[0].message.content
+        if content is None:
+            logger.warning("_analyze_product_image: content is None, retrying without json_object mode")
+            continue
+        try:
+            return json.loads(content)
+        except Exception:
+            match = re.search(r'\{.*\}', content, re.DOTALL)
+            if match:
+                return json.loads(match.group())
+    return {"prompt": ""}
+
+
 async def _analyze_ref(image_data: bytes, category: str) -> dict:
     """Returns a prompts dict based on the category type."""
-    if _is_neurophoto(category):
+    if _is_product(category):
+        result = await _analyze_product_image(image_data)
+        return {
+            "full": result.get("prompt", ""),
+        }
+
+    elif _is_neurophoto(category):
         base = await _ocr(image_data)
         adapted = await _adapt_neurophoto(base)
         return {
